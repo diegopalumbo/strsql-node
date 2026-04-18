@@ -13,6 +13,7 @@
   },
   "keywords": ["ibm-i", "as400", "strsql", "odbc", "db2", "iseries"],
   "license": "MIT",
+  "author": "Diego Palumbo",
   "dependencies": {
     "chalk": "^4.1.2",
     "cli-table3": "^0.6.3",
