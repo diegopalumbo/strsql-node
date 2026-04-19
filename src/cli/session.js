@@ -88,6 +88,10 @@ class STRSQLSession {
   }
 
   async _connect(config) {
+    if (!config.host) {
+      console.error(chalk.red('Connection failed: host is missing. Re-save the profile with --host.'));
+      return;
+    }
     const label = config.host + (config.username ? `@${config.username}` : '');
     process.stdout.write(chalk.dim(`Connecting to ${label}…`));
     try {
