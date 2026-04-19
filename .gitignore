@@ -9,3 +9,5 @@ build/
 coverage/
 *.tsbuildinfo
 *.bak
+.vscode/
+*.swp
