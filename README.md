@@ -75,7 +75,7 @@ Each driver knows the correct ODBC connection string format, catalog queries, pa
 
 | Requirement | Notes |
 |---|---|
-| Node.js ≥ 16 | |
+| Node.js ≥ 16 | https://nodejs.org/en |
 | `odbc` npm package | Requires native build (`node-gyp`) |
 | ODBC driver for your DB | See table above |
 | unixODBC (Linux / PASE) | `sudo apt-get install unixodbc unixodbc-dev` |
@@ -87,6 +87,9 @@ sudo apt-get install unixodbc unixodbc-dev build-essential
 # macOS
 brew install unixodbc
 ```
+
+For Windows see doc here: https://ibmi-oss-docs.readthedocs.io/en/latest/odbc/installation.html#windows
+
 
 ---
 
