@@ -47,7 +47,7 @@ const VERSION        = require('../../package.json').version;
 const BANNER = chalk.bold.green(`
  ╔═══════════════════════════════════════════╗
  ║   strsql-node  v${VERSION.padEnd(26)}║
- ║   IBM i Interactive SQL via ODBC          ║
+ ║   Interactive SQL via ODBC and more...    ║
  ╚═══════════════════════════════════════════╝
 `) + chalk.dim(' Type \\help for commands, \\quit to exit.\n');
 
