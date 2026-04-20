@@ -121,12 +121,35 @@ class ODBCConnection {
     return this.query(sql, params);
   }
 
+  /**
+   * Resolve the schema for an unqualified table name by searching the library list.
+   * Returns the first library that contains the table, or '' if not found.
+   * Only applies to IBM i with an active library list.
+   */
+  async _resolveSchemaFromLibl(tableName) {
+    if (this.type !== 'ibmi') return '';
+    const libs = this.config.libraryList;
+    if (!libs || (Array.isArray(libs) && libs.length === 0)) return '';
+    const arr = Array.isArray(libs) ? libs : libs.split(',').map(l => l.trim()).filter(Boolean);
+    const placeholders = arr.map(() => '?').join(',');
+    const result = await this.query(
+      `SELECT TABLE_SCHEMA FROM QSYS2.SYSTABLES WHERE TABLE_NAME = ? AND TABLE_SCHEMA IN (${placeholders}) FETCH FIRST 1 ROWS ONLY`,
+      [tableName.toUpperCase(), ...arr.map(l => l.toUpperCase())]
+    );
+    return result.rows.length > 0 ? result.rows[0].TABLE_SCHEMA.trim() : '';
+  }
+
   async describeTable(table, schema) {
-    const s = schema || this.config.defaultSchema || '';
+    let s = schema || this.config.defaultSchema || '';
     const [schemaName, tableName] = table.includes('.')
       ? table.split('.')
       : [s, table];
-    const spec = this.driver.describeSQL(schemaName, tableName);
+    // If no schema and library list is active, resolve from library list
+    let resolvedSchema = schemaName;
+    if (!resolvedSchema && this.config.libraryList) {
+      resolvedSchema = await this._resolveSchemaFromLibl(tableName);
+    }
+    const spec = this.driver.describeSQL(resolvedSchema, tableName);
     const raw  = await this.query(spec.sql, spec.params);
     if (spec.mapRow) {
       return {
@@ -142,12 +165,17 @@ class ODBCConnection {
   }
 
   async primaryKeys(table, schema) {
-    const s = schema || this.config.defaultSchema || '';
+    let s = schema || this.config.defaultSchema || '';
     const [schemaName, tableName] = table.includes('.')
       ? table.split('.')
       : [s, table];
     if (!this.driver.primaryKeysSQL) return new Set();
-    const spec = this.driver.primaryKeysSQL(schemaName, tableName);
+    // If no schema and library list is active, resolve from library list
+    let resolvedSchema = schemaName;
+    if (!resolvedSchema && this.config.libraryList) {
+      resolvedSchema = await this._resolveSchemaFromLibl(tableName);
+    }
+    const spec = this.driver.primaryKeysSQL(resolvedSchema, tableName);
     try {
       const raw = await this.query(spec.sql, spec.params);
       const rows = spec.mapRow ? raw.rows.map(spec.mapRow).filter(Boolean) : raw.rows;

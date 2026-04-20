@@ -423,6 +423,7 @@ class STRSQLSession {
           PK: pkSet.has((row.COLUMN_NAME || '').toUpperCase()) ? '🔑' : '',
         }));
         result.columns = [{ name: 'PK' }, ...result.columns];
+        console.log(formatTable(result));
         break;
       }
 
