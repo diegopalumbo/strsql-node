@@ -5,6 +5,7 @@ require('dotenv').config();
 const readline = require('readline');
 const chalk    = require('chalk');
 const path     = require('path');
+const fs       = require('fs');
 
 const { IBMiConnection }  = require('../lib/connection');
 const { ProfileManager }  = require('../lib/profiles');
@@ -100,6 +101,14 @@ class STRSQLSession {
       console.log(chalk.green(' ✓'));
       if (config.defaultSchema) {
         console.log(chalk.dim(` Default schema: ${config.defaultSchema}`));
+      }
+      if (config.libraryList) {
+        const libs = Array.isArray(config.libraryList)
+          ? config.libraryList
+          : config.libraryList.split(',').map(l => l.trim()).filter(Boolean);
+        if (libs.length > 0) {
+          console.log(chalk.dim(` Library list: ${libs.join(', ')}`));
+        }
       }
     } catch (err) {
       console.log(chalk.red(' ✗'));
@@ -249,6 +258,7 @@ class STRSQLSession {
             case '--schema':   connCfg.defaultSchema = args[++i]; break;
             case '--database': connCfg.database      = args[++i]; break;
             case '--port':     connCfg.port          = parseInt(args[++i],10); break;
+            case '--library-list': case '--libl': connCfg.libraryList = args[++i]; break;
             default:           if (!args[i].startsWith('--')) positional.push(args[i]);
           }
         }
@@ -321,6 +331,7 @@ class STRSQLSession {
             case '--service':  pfCfg.serviceName   = pfArgs[++i]; break;
             case '--ssl':      pfCfg.sslMode       = pfArgs[++i]; break;
             case '--naming':   pfCfg.namingMode    = pfArgs[++i]; break;
+            case '--library-list': case '--libl': pfCfg.libraryList = pfArgs[++i]; break;
           }
         }
         if (!pfCfg.type) pfCfg.type = 'ibmi';
@@ -362,6 +373,32 @@ class STRSQLSession {
         break;
       }
 
+      case 'libl': {
+        // \libl [LIB1,LIB2,...]  — show or set IBM i library list
+        if (!this.conn?.isConnected()) { console.error(chalk.red('Not connected.')); break; }
+        if (args.length === 0) {
+          const current = this.conn.config?.libraryList;
+          if (current) {
+            const libs = Array.isArray(current) ? current : current.split(',').map(l => l.trim());
+            console.log(chalk.dim(`Library list: ${libs.join(', ')}`));
+          } else {
+            console.log(chalk.dim('No library list set.'));
+          }
+        } else {
+          const libStr = args.join(',');
+          try {
+            await this.conn.setLibraryList(libStr);
+            const libs = Array.isArray(this.conn.config.libraryList)
+              ? this.conn.config.libraryList
+              : this.conn.config.libraryList.split(',').map(l => l.trim());
+            console.log(chalk.green(`Library list set: ${libs.join(', ')}`));
+          } catch (err) {
+            console.error(chalk.red(`Failed to set library list: ${err.message}`));
+          }
+        }
+        break;
+      }
+
       case 'tables': {
         // \tables [schema]
         if (!this.conn?.isConnected()) { console.error(chalk.red('Not connected.')); break; }
@@ -378,7 +415,15 @@ class STRSQLSession {
         if (!this.conn?.isConnected()) { console.error(chalk.red('Not connected.')); break; }
         const [table, schema] = args;
         if (!table) { console.error(chalk.red('Usage: \\describe [schema.]TABLE')); break; }
-        const result = await this.conn.describeTable(table, schema);
+        const [result, pkSet] = await Promise.all([
+          this.conn.describeTable(table, schema),
+          this.conn.primaryKeys(table, schema),
+        ]);
+        result.rows = result.rows.map(row => ({
+          ...row,
+          PK: pkSet.has((row.COLUMN_NAME || '').toUpperCase()) ? '🔑' : '',
+        }));
+        result.columns = [{ name: 'PK' }, ...result.columns];
         console.log(formatTable(result));
         break;
       }
@@ -759,11 +804,14 @@ class STRSQLSession {
             if (dropIfExists) {
               try { await this.conn.execute(`DROP TABLE ${ddlTarget}`); } catch {}
             }
-            await this.conn.execute(ddl);
+            await this.conn.execute(ddl.replace(/;\s*$/, ''));
             console.log(chalk.green(`✓ Table ${ddlTarget} created.`));
           }
         } catch (err) {
-          console.error(chalk.red(err.message));
+          const odbcDetail = err.odbcErrors
+            ? '\n  ' + err.odbcErrors.map(e => `[${e.state}] ${e.message}`).join('\n  ')
+            : '';
+          console.error(chalk.red(err.message + odbcDetail));
         }
         break;
       }
@@ -800,13 +848,108 @@ class STRSQLSession {
         console.clear();
         break;
 
+      case 'run': {
+        // \run <file.sql> [--stop-on-error]
+        // Read a SQL file from disk and execute each statement sequentially.
+        if (args.length === 0) {
+          console.error(chalk.red('Usage: \\run <file.sql> [--stop-on-error]'));
+          break;
+        }
+        if (!this.conn?.isConnected()) {
+          console.error(chalk.red('Not connected. Use \\connect or \\profile first.'));
+          break;
+        }
+
+        let filePath = null;
+        let stopOnError = false;
+        for (const a of args) {
+          if (a === '--stop-on-error') stopOnError = true;
+          else if (!a.startsWith('--')) filePath = a;
+        }
+        if (!filePath) {
+          console.error(chalk.red('Specify a SQL file path.'));
+          break;
+        }
+
+        const absPath = path.resolve(filePath);
+        if (!fs.existsSync(absPath)) {
+          console.error(chalk.red(`File not found: ${absPath}`));
+          break;
+        }
+
+        const content = fs.readFileSync(absPath, 'utf8');
+        // Split on semicolons, strip comments (-- line comments)
+        const statements = content
+          .split(/;\s*(?:\r?\n|$)/)
+          .map(s => s.replace(/--.*$/gm, '').trim())
+          .filter(s => s.length > 0 && !/^\s*$/.test(s));
+
+        if (statements.length === 0) {
+          console.log(chalk.dim('No SQL statements found in file.'));
+          break;
+        }
+
+        console.log(chalk.dim(`\n  Executing ${statements.length} statement(s) from ${path.basename(absPath)}…\n`));
+
+        let executed = 0;
+        let errors   = 0;
+        const startTime = Date.now();
+
+        for (let i = 0; i < statements.length; i++) {
+          const sql = statements[i];
+          const label = `[${i + 1}/${statements.length}]`;
+
+          try {
+            const upper = sql.trim().toUpperCase();
+            const isSelect =
+              upper.startsWith('SELECT') ||
+              upper.startsWith('WITH') ||
+              upper.startsWith('VALUES');
+
+            if (isSelect) {
+              const result = await this.conn.query(sql);
+              this.lastResult = result;
+              console.log(chalk.dim(`${label} SELECT → ${result.rowCount} row(s)`));
+              console.log(formatTable(result, { maxCellWidth: this.opts.maxCellWidth || 40 }));
+            } else {
+              const result = await this.conn.execute(sql);
+              this.lastResult = result;
+              console.log(chalk.dim(`${label}`) + ' ' + formatExecResult(result));
+            }
+            executed++;
+          } catch (err) {
+            errors++;
+            console.error(chalk.red(`${label} Error: ${err.message}`));
+            if (err.odbcErrors) {
+              for (const e of err.odbcErrors) {
+                console.error(chalk.dim(`  [${e.state}] ${e.message}`));
+              }
+            }
+            console.error(chalk.dim(`  SQL: ${sql.slice(0, 120)}${sql.length > 120 ? '…' : ''}`));
+            if (stopOnError) {
+              console.error(chalk.yellow('  Stopped on error (--stop-on-error).'));
+              break;
+            }
+          }
+        }
+
+        const elapsed = Date.now() - startTime;
+        console.log(chalk.dim(`\n  Done: ${executed} executed, ${errors} error(s), ${elapsed} ms\n`));
+        break;
+      }
+
       case 'status': {
         if (this.conn?.isConnected()) {
           const cfg = this.conn.config;
           const typeLabel = this.conn.dbLabel || cfg.type || 'ibmi';
           const hostOrDb  = cfg.database || cfg.host || '?';
-          console.log(chalk.green('● Connected') +
-            chalk.dim(`  [${typeLabel}]  host=${hostOrDb}  user=${cfg.username || '?'}  schema=${cfg.defaultSchema || '?'}`));
+          let statusLine = chalk.green('● Connected') +
+            chalk.dim(`  [${typeLabel}]  host=${hostOrDb}  user=${cfg.username || '?'}  schema=${cfg.defaultSchema || '?'}`);
+          if (cfg.libraryList) {
+            const libs = Array.isArray(cfg.libraryList) ? cfg.libraryList : cfg.libraryList.split(',').map(l => l.trim());
+            statusLine += chalk.dim(`  libl=${libs.join(',')}`);
+          }
+          console.log(statusLine);
         } else {
           console.log(chalk.red('● Not connected'));
         }
@@ -833,8 +976,8 @@ class STRSQLSession {
     const META_CMDS = [
       '\\help', '\\quit', '\\connect', '\\disconnect',
       '\\profile', '\\profiles', '\\saveprofile', '\\delprofile',
-      '\\schema', '\\tables', '\\describe',
-      '\\export', '\\import', '\\pipe', '\\ddl', '\\drivers', '\\history', '\\hsearch', '\\status', '\\clear',
+      '\\schema', '\\libl', '\\tables', '\\describe',
+      '\\export', '\\import', '\\pipe', '\\ddl', '\\run', '\\drivers', '\\history', '\\hsearch', '\\status', '\\clear',
     ];
 
     const all = [...SQL_KEYWORDS, ...META_CMDS];
@@ -862,12 +1005,14 @@ ${chalk.bold('Profiles')}
 
 ${chalk.bold('Schema & objects')}
   ${s('\\schema')} [name]                           Show/set default schema
+  ${s('\\libl')} [LIB1,LIB2,...]                    Show/set IBM i library list
   ${s('\\tables')} [schema]                         List tables in a schema
   ${s('\\describe')} [schema.]TABLE                 Describe table columns
 
 ${chalk.bold('SQL execution')}
   ${d('Enter SQL and end with ; or type GO/RUN on its own line')}
   ${d('Multi-line input supported — press Enter to continue')}
+  ${s('\\run')} <file.sql> ${d('[--stop-on-error]')}     Execute SQL from a file
 
 ${chalk.bold('Export')}
   ${s('\\export')} <file.csv>                        Export last result as CSV

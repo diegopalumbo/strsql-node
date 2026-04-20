@@ -115,6 +115,7 @@ node bin/strsql.js [command] [options]
 | `STRSQL_USER` | Username |
 | `STRSQL_PASSWORD` | Password |
 | `STRSQL_SCHEMA` | Default schema / library |
+| `STRSQL_LIBRARY_LIST` | IBM i library list (comma-separated, e.g. `MYLIB,QGPL,QUSRSYS`) |
 
 Copy `.env.example` → `.env` in the working directory. CLI flags always win over environment variables, which win over saved profiles.
 
@@ -129,7 +130,7 @@ Profiles are stored in `~/.strsql-node/profiles.json`. Each profile carries the 
 strsql profiles list
 
 # Add profiles for different databases
-strsql profiles add ibmi-prod  --type ibmi       --host 10.0.0.1  -u PRODUSER --password s3c -s PRODLIB
+strsql profiles add ibmi-prod  --type ibmi       --host 10.0.0.1  -u PRODUSER --password s3c -s PRODLIB -l PRODLIB,QGPL,QUSRSYS
 strsql profiles add pg-sales   --type postgresql  --host pg.local  -u admin    --password s3c --database sales --schema public --ssl require
 strsql profiles add ss-dev     --type sqlserver   --host ss.local  -u sa       --password s3c --database DevDB --instance DEV
 strsql profiles add ora-uat    --type oracle      --host ora.local -u SYS      --password s3c --service ORCL
@@ -153,7 +154,8 @@ strsql drivers
 ```bash
 strsql                                    # uses STRSQL_* env vars or .env
 strsql --host 10.0.0.1 -u MYUSER --password secret
-strsql --profile ibmi-prod                # IBM i saved profile
+strsql --profile ibmi-prod                # IBM i saved profile (library list from profile)
+strsql --profile ibmi-prod -l MYLIB,TESTLIB  # override library list
 strsql --profile pg-sales                 # PostgreSQL saved profile
 strsql --type sqlserver --host ss.local -u sa --password s3c --database MyDB
 ```
@@ -213,6 +215,7 @@ Start with `strsql` or `strsql --profile <n>`. Type `\help` inside the session f
 |---|---|
 | `\connect <host> [user] [pwd] [schema]` | Connect (IBM i, backward compat) |
 | `\connect --type TYPE --host H --user U --password P [--database DB] [--port N]` | Connect to any supported DB |
+| `\connect --host H --user U --password P --library-list LIB1,LIB2` | Connect with IBM i library list |
 | `\disconnect` | Close current connection |
 | `\profile <n>` | Switch to a saved profile |
 | `\status` | Show connection status and DB type |
@@ -231,14 +234,18 @@ Additional options for `\saveprofile`:
 - `--service` — Oracle service name
 - `--ssl` — PostgreSQL SSL mode (`disable` / `require` / `verify-ca` / `verify-full`)
 - `--naming sql|system` — IBM i naming mode
+- `--library-list LIB1,LIB2,...` — IBM i library list (alias: `--libl`)
 
 ### Schema & objects
 
 | Command | Description |
 |---|---|
 | `\schema [name]` | Show or set default schema |
+| `\libl [LIB1,LIB2,...]` | Show or set IBM i library list |
 | `\tables [schema]` | List tables (uses native catalog per DB) |
 | `\describe [schema.]TABLE` | Describe table columns |
+
+The `\libl` command calls `CHGLIBL` on the IBM i job via `QSYS2.QCMDEXC`. Without arguments it displays the current library list; with arguments it sets a new one.
 
 ### SQL execution
 
@@ -251,6 +258,17 @@ SQL> SELECT ORDNUM, CUSNAM, ORDDAT
   -> ORDER BY ORDDAT DESC
   -> FETCH FIRST 20 ROWS ONLY;
 ```
+
+#### Execute SQL from a file
+
+Use `\run` to execute all SQL statements from a file on disk:
+
+```
+SQL> \run /path/to/queries.sql
+SQL> \run updates.sql --stop-on-error
+```
+
+The file is split on `;` delimiters, line comments (`--`) are stripped, and each statement is executed sequentially. By default execution continues on error; use `--stop-on-error` to halt at the first failure. A summary with counts and elapsed time is printed at the end.
 
 ### Export
 
@@ -358,6 +376,7 @@ strsql drivers          List supported database types
 |---|---|
 | `-p, --profile <n>` | Source connection profile |
 | `-H, --host / -u, --user / --password / -s, --schema` | Inline connection params |
+| `-l, --library-list <libs>` | IBM i library list (comma-separated) |
 | `--type <type>` | DB type (default: `ibmi`) |
 | `-f, --format <fmt>` | `table` \| `csv` \| `json` \| `insert` \| `merge` |
 | `-o, --out <file>` | Export to file (`.csv` / `.json` / `.sql` / `.insert.sql` / `.merge.sql`) |
@@ -371,6 +390,7 @@ strsql drivers          List supported database types
 | Option | Description |
 |---|---|
 | `-p, --profile <n>` | Connection profile |
+| `-l, --library-list <libs>` | IBM i library list (comma-separated) |
 | `-t, --table <T>` | Target table (required for CSV/JSON) |
 | `-m, --mode <mode>` | `abort` \| `skip` (default: `abort`) |
 | `-b, --batch <N>` | Rows per commit (default: 100) |
@@ -384,10 +404,12 @@ strsql drivers          List supported database types
 |---|---|
 | `-p, --profile <n>` | Source profile |
 | `--source-table <T>` | Source table |
+| `-l, --library-list <libs>` | Source IBM i library list (comma-separated) |
 | `--sql <SELECT>` | Override source SELECT |
 | `--where <condition>` | WHERE clause on source |
 | `--target-profile <n>` | Target profile |
 | `--target-host / --target-user / --target-password / --target-schema` | Inline target params |
+| `--target-library-list <libs>` | Target IBM i library list (comma-separated) |
 | `--target-table <T>` | Target table (default: same as source) |
 | `--mode insert\|merge` | Transfer mode |
 | `--keys <cols>` | Key columns for merge |
@@ -416,6 +438,7 @@ const conn = new ODBCConnection({
   password: 'secret',
   defaultSchema: 'MYLIB',
   namingMode: 'sql',          // 'sql' | 'system'
+  libraryList: 'MYLIB,QGPL,QUSRSYS',  // IBM i library list (string or array)
 });
 
 // PostgreSQL
@@ -479,6 +502,7 @@ await conn.disconnect();
 | `listTables(schema)` | `Promise<Result>` | List tables (native catalog per DB) |
 | `describeTable(table, [schema])` | `Promise<Result>` | Describe columns (native catalog per DB) |
 | `paginateSQL(sql, offset, limit)` | `string` | Wrap SQL with DB-specific pagination |
+| `setLibraryList(libs)` | `Promise<void>` | Set IBM i library list at runtime (string or array) |
 | `quoteIdentifier(name)` | `string` | Quote identifier for this DB |
 | `isConnected()` | `boolean` | Connection status |
 | `dbType` | `string` | DB type key e.g. `'ibmi'` |

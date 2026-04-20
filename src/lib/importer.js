@@ -280,7 +280,10 @@ class Importer {
       await this.conn.execute(sql, params);
       return true;
     } catch (err) {
-      const errMsg = err.message || String(err);
+      const odbcDetail = err.odbcErrors
+        ? ' ' + err.odbcErrors.map(e => `[${e.state}] ${e.message}`).join(' ')
+        : '';
+      const errMsg = (err.message || String(err)) + odbcDetail;
 
       if (this.errorMode === ERROR_MODE.ABORT) {
         result.errors.push({ row: rawRow, sql, error: errMsg });

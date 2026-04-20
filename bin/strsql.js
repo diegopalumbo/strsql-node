@@ -26,13 +26,15 @@ program
   .option('-u, --user <user>',     'Username')
   .option('--password <password>', 'Password (prefer STRSQL_PASSWORD env var)')
   .option('-s, --schema <schema>', 'Default schema/library')
+  .option('-l, --library-list <libs>', 'IBM i library list (comma-separated)')
   .option('--max-cell-width <n>',  'Max column width in table output', '40')
   .action(async (opts) => {
     // CLI flags override ENV and profile
-    if (opts.host)     process.env.STRSQL_HOST     = opts.host;
-    if (opts.user)     process.env.STRSQL_USER     = opts.user;
-    if (opts.password) process.env.STRSQL_PASSWORD = opts.password;
-    if (opts.schema)   process.env.STRSQL_SCHEMA   = opts.schema;
+    if (opts.host)        process.env.STRSQL_HOST         = opts.host;
+    if (opts.user)        process.env.STRSQL_USER         = opts.user;
+    if (opts.password)    process.env.STRSQL_PASSWORD     = opts.password;
+    if (opts.schema)      process.env.STRSQL_SCHEMA       = opts.schema;
+    if (opts.libraryList) process.env.STRSQL_LIBRARY_LIST = opts.libraryList;
 
     const session = new STRSQLSession({
       profile:      opts.profile,
@@ -51,16 +53,18 @@ program
   .option('-u, --user <user>',      'Username')
   .option('--password <password>',  'Password')
   .option('-s, --schema <schema>',  'Default schema')
+  .option('-l, --library-list <libs>', 'IBM i library list (comma-separated)')
   .option('-f, --format <fmt>',     'Output format: table|csv|json|insert|merge', 'table')
   .option('-o, --out <file>',       'Export result to file (.csv/.json/.sql/.insert.sql/.merge.sql)')
   .option('--table <table>',        'Target table name for SQL export (e.g. MYLIB.ORDERS)')
   .option('--keys <keys>',          'Key columns for MERGE, comma-separated (e.g. ORDNUM,CUSNUM)')
   .option('--batch <n>',            'Rows per INSERT statement (default 1)', '1')
   .action(async (sql, opts) => {
-    if (opts.host)     process.env.STRSQL_HOST     = opts.host;
-    if (opts.user)     process.env.STRSQL_USER     = opts.user;
-    if (opts.password) process.env.STRSQL_PASSWORD = opts.password;
-    if (opts.schema)   process.env.STRSQL_SCHEMA   = opts.schema;
+    if (opts.host)        process.env.STRSQL_HOST         = opts.host;
+    if (opts.user)        process.env.STRSQL_USER         = opts.user;
+    if (opts.password)    process.env.STRSQL_PASSWORD     = opts.password;
+    if (opts.schema)      process.env.STRSQL_SCHEMA       = opts.schema;
+    if (opts.libraryList) process.env.STRSQL_LIBRARY_LIST = opts.libraryList;
 
     const { IBMiConnection }  = require('../src/lib/connection');
     const { ProfileManager }  = require('../src/lib/profiles');
@@ -127,6 +131,7 @@ program
   .option('-u, --user <user>',       'Username')
   .option('--password <password>',   'Password')
   .option('-s, --schema <schema>',   'Default schema')
+  .option('-l, --library-list <libs>', 'IBM i library list (comma-separated)')
   .option('-t, --table <table>',     'Target table e.g. MYLIB.ORDERS  (required for CSV/JSON)')
   .option('-m, --mode <mode>',       'Error mode: abort|skip  (default: abort)', 'abort')
   .option('-b, --batch <n>',         'Rows per commit (default: 100)', '100')
@@ -134,10 +139,11 @@ program
   .option('--map <mapping>',         'Column mapping: srcCol=DEST,src2=DEST2')
   .option('--delimiter <char>',      'CSV delimiter (default: ,)', ',')
   .action(async (file, opts) => {
-    if (opts.host)     process.env.STRSQL_HOST     = opts.host;
-    if (opts.user)     process.env.STRSQL_USER     = opts.user;
-    if (opts.password) process.env.STRSQL_PASSWORD = opts.password;
-    if (opts.schema)   process.env.STRSQL_SCHEMA   = opts.schema;
+    if (opts.host)        process.env.STRSQL_HOST         = opts.host;
+    if (opts.user)        process.env.STRSQL_USER         = opts.user;
+    if (opts.password)    process.env.STRSQL_PASSWORD     = opts.password;
+    if (opts.schema)      process.env.STRSQL_SCHEMA       = opts.schema;
+    if (opts.libraryList) process.env.STRSQL_LIBRARY_LIST = opts.libraryList;
 
     const { IBMiConnection } = require('../src/lib/connection');
     const { ProfileManager } = require('../src/lib/profiles');
@@ -207,6 +213,7 @@ program
   .option('-u, --user <user>',             'Source username')
   .option('--password <password>',         'Source password')
   .option('-s, --schema <schema>',         'Source default schema')
+  .option('-l, --library-list <libs>',     'Source IBM i library list (comma-separated)')
   .option('--source-table <table>',        'Source table  e.g. SRCLIB.ORDERS')
   .option('--sql <select>',                'Override: full SELECT on source')
   .option('--where <condition>',           'WHERE clause appended to source SELECT')
@@ -216,6 +223,7 @@ program
   .option('--target-user <user>',          'Target username')
   .option('--target-password <password>',  'Target password')
   .option('--target-schema <schema>',      'Target default schema')
+  .option('--target-library-list <libs>',  'Target IBM i library list (comma-separated)')
   .option('--target-table <table>',        'Target table (default: same as source)')
   // ── transfer ──
   .option('--mode <mode>',                 'Transfer mode: insert|merge  (default: insert)', 'insert')
@@ -229,10 +237,11 @@ program
   .option('--dry-run',                     'Fetch source rows, skip writes to target')
   .action(async (opts) => {
     // source env
-    if (opts.host)     process.env.STRSQL_HOST     = opts.host;
-    if (opts.user)     process.env.STRSQL_USER     = opts.user;
-    if (opts.password) process.env.STRSQL_PASSWORD = opts.password;
-    if (opts.schema)   process.env.STRSQL_SCHEMA   = opts.schema;
+    if (opts.host)        process.env.STRSQL_HOST         = opts.host;
+    if (opts.user)        process.env.STRSQL_USER         = opts.user;
+    if (opts.password)    process.env.STRSQL_PASSWORD     = opts.password;
+    if (opts.schema)      process.env.STRSQL_SCHEMA       = opts.schema;
+    if (opts.libraryList) process.env.STRSQL_LIBRARY_LIST = opts.libraryList;
 
     const { IBMiConnection } = require('../src/lib/connection');
     const { ProfileManager } = require('../src/lib/profiles');
@@ -264,6 +273,7 @@ program
         username:      opts.targetUser,
         password:      opts.targetPassword,
         defaultSchema: opts.targetSchema,
+        libraryList:   opts.targetLibraryList,
       };
     } else {
       console.error(chalk.red('Specify target: --target-profile <n> or --target-host <h>'));
@@ -377,6 +387,7 @@ profilesCmd
   .option('-u, --user <user>', 'Username')
   .option('--password <password>', 'Password (stored in plain text)')
   .option('-s, --schema <schema>', 'Default schema/library')
+  .option('-l, --library-list <libs>', 'IBM i library list (comma-separated)')
   .option('--naming <mode>', 'Naming mode: sql or system', 'sql')
   .action((name, opts) => {
     const pm = new ProfileManager();
@@ -386,6 +397,7 @@ profilesCmd
       username: opts.user,
       password: opts.password,
       defaultSchema: opts.schema,
+      libraryList: opts.libraryList,
       namingMode: opts.naming,
     });
     console.log(chalk.green(`Profile "${name}" saved.`));

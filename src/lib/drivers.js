@@ -33,11 +33,17 @@ const DRIVERS = {
       if (cfg.username)      p.push(`UID=${cfg.username}`);
       if (cfg.password)      p.push(`PWD=${cfg.password}`);
       if (cfg.defaultSchema) p.push(`DBQ=${cfg.defaultSchema}`);
-      if (cfg.namingMode === 'system') p.push(`NAM=1`);
+      // When libraryList is set, force system naming (NAM=1) so that
+      // unqualified table references resolve through the library list.
+      if (cfg.libraryList || cfg.namingMode === 'system') p.push(`NAM=1`);
       if (cfg.translate)     p.push(`TRANSLATE=1`);
       return p.join(';') + ';';
     },
     setSchema: `SET SCHEMA ?`,
+    setLibraryList(libs) {
+      const libStr = libs.map(l => l.trim().toUpperCase()).join(' ');
+      return `CALL QSYS2.QCMDEXC('CHGLIBL LIBL(${libStr})')`;
+    },
     listTablesSql(schema) {
       return {
         sql: `SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE
@@ -52,6 +58,18 @@ const DRIVERS = {
         sql: `SELECT COLUMN_NAME, DATA_TYPE, LENGTH, NUMERIC_SCALE, IS_NULLABLE, COLUMN_DEFAULT
               FROM QSYS2.SYSCOLUMNS
               WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+              ORDER BY ORDINAL_POSITION`,
+        params: [schema.toUpperCase(), table.toUpperCase()],
+      };
+    },
+    primaryKeysSQL(schema, table) {
+      // QSYS2.SYSKEYS holds key columns for both SQL-constraint PKs and DDS
+      // physical file keys. The primary access path of a physical file has
+      // INDEX_NAME = TABLE_NAME and INDEX_SCHEMA = TABLE_SCHEMA.
+      return {
+        sql: `SELECT COLUMN_NAME
+              FROM QSYS2.SYSKEYS
+              WHERE INDEX_SCHEMA = ? AND INDEX_NAME = ?
               ORDER BY ORDINAL_POSITION`,
         params: [schema.toUpperCase(), table.toUpperCase()],
       };
@@ -110,6 +128,16 @@ const DRIVERS = {
         params: [schema, table],
       };
     },
+    primaryKeysSQL(schema, table) {
+      return {
+        sql: `SELECT COLUMN_NAME
+              FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+              WHERE OBJECTPROPERTY(OBJECT_ID(CONSTRAINT_SCHEMA + '.' + CONSTRAINT_NAME), 'IsPrimaryKey') = 1
+                AND TABLE_SCHEMA = ? AND TABLE_NAME = ?
+              ORDER BY ORDINAL_POSITION`,
+        params: [schema, table],
+      };
+    },
     paginateSQL(inner, offset, limit) {
       // SQL Server requires ORDER BY for OFFSET … FETCH
       const hasOrder = /ORDER\s+BY/i.test(inner);
@@ -159,6 +187,20 @@ const DRIVERS = {
         params: [schema, table],
       };
     },
+    primaryKeysSQL(schema, table) {
+      return {
+        sql: `SELECT kcu.column_name AS COLUMN_NAME
+              FROM information_schema.table_constraints tc
+              JOIN information_schema.key_column_usage kcu
+                ON tc.constraint_name = kcu.constraint_name
+               AND tc.table_schema    = kcu.table_schema
+               AND tc.table_name      = kcu.table_name
+              WHERE tc.constraint_type = 'PRIMARY KEY'
+                AND tc.table_schema = ? AND tc.table_name = ?
+              ORDER BY kcu.ordinal_position`,
+        params: [schema, table],
+      };
+    },
     paginateSQL(inner, offset, limit) {
       return `SELECT * FROM (${inner}) AS _p LIMIT ${limit} OFFSET ${offset}`;
     },
@@ -198,6 +240,20 @@ const DRIVERS = {
               FROM information_schema.COLUMNS
               WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
               ORDER BY ORDINAL_POSITION`,
+        params: [schema, table],
+      };
+    },
+    primaryKeysSQL(schema, table) {
+      return {
+        sql: `SELECT kcu.COLUMN_NAME
+              FROM information_schema.TABLE_CONSTRAINTS tc
+              JOIN information_schema.KEY_COLUMN_USAGE kcu
+                ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+               AND tc.TABLE_SCHEMA    = kcu.TABLE_SCHEMA
+               AND tc.TABLE_NAME      = kcu.TABLE_NAME
+              WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
+                AND tc.TABLE_SCHEMA = ? AND tc.TABLE_NAME = ?
+              ORDER BY kcu.ORDINAL_POSITION`,
         params: [schema, table],
       };
     },
@@ -241,6 +297,19 @@ const DRIVERS = {
               FROM ALL_TAB_COLUMNS
               WHERE OWNER = ? AND TABLE_NAME = ?
               ORDER BY COLUMN_ID`,
+        params: [schema.toUpperCase(), table.toUpperCase()],
+      };
+    },
+    primaryKeysSQL(schema, table) {
+      return {
+        sql: `SELECT acc.COLUMN_NAME
+              FROM ALL_CONSTRAINTS ac
+              JOIN ALL_CONS_COLUMNS acc
+                ON ac.CONSTRAINT_NAME = acc.CONSTRAINT_NAME
+               AND ac.OWNER           = acc.OWNER
+              WHERE ac.CONSTRAINT_TYPE = 'P'
+                AND ac.OWNER = ? AND ac.TABLE_NAME = ?
+              ORDER BY acc.POSITION`,
         params: [schema.toUpperCase(), table.toUpperCase()],
       };
     },
@@ -288,6 +357,20 @@ const DRIVERS = {
         params: [schema.toUpperCase(), table.toUpperCase()],
       };
     },
+    primaryKeysSQL(schema, table) {
+      return {
+        sql: `SELECT kc.COLNAME AS COLUMN_NAME
+              FROM SYSCAT.TABCONST tc
+              JOIN SYSCAT.KEYCOLUSE kc
+                ON tc.CONSTNAME = kc.CONSTNAME
+               AND tc.TABSCHEMA = kc.TABSCHEMA
+               AND tc.TABNAME   = kc.TABNAME
+              WHERE tc.TYPE = 'P'
+                AND tc.TABSCHEMA = ? AND tc.TABNAME = ?
+              ORDER BY kc.COLSEQ`,
+        params: [schema.toUpperCase(), table.toUpperCase()],
+      };
+    },
     paginateSQL(inner, offset, limit) {
       if (offset > 0) {
         return `SELECT * FROM (${inner}) AS SUBQ OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY`;
@@ -328,6 +411,13 @@ const DRIVERS = {
           IS_NULLABLE:    row.notnull ? 'N' : 'Y',
           COLUMN_DEFAULT: row.dflt_value,
         }),
+      };
+    },
+    primaryKeysSQL(_schema, table) {
+      return {
+        sql: `PRAGMA table_info(${table.replace(/[^a-zA-Z0-9_]/g, '')})`,
+        params: [],
+        mapRow: row => row.pk > 0 ? { COLUMN_NAME: row.name } : null,
       };
     },
     paginateSQL(inner, offset, limit) {
