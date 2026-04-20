@@ -46,13 +46,33 @@ class ODBCConnection {
     this.conn      = await odbc.connect(connStr);
     this.connected = true;
 
-    if (this.config.defaultSchema && this.driver.setSchema) {
+    // When libraryList is set on IBM i, system naming is forced (NAM=1)
+    // so unqualified names resolve through the library list.
+    // Skip SET SCHEMA in that case — it would override library list resolution.
+    const hasLibraryList = this.config.libraryList && this.driver.setLibraryList;
+
+    if (this.config.defaultSchema && this.driver.setSchema && !hasLibraryList) {
       try {
         const sql = this.driver.setSchema.includes('?')
           ? this.driver.setSchema.replace('?', this.config.defaultSchema)
           : `${this.driver.setSchema} ${this.config.defaultSchema}`;
         await this.conn.query(sql);
       } catch { /* non-fatal */ }
+    }
+
+    // IBM i library list: run CHGLIBL after connect
+    if (hasLibraryList) {
+      const libs = Array.isArray(this.config.libraryList)
+        ? this.config.libraryList
+        : this.config.libraryList.split(',').map(l => l.trim()).filter(Boolean);
+      if (libs.length > 0) {
+        try {
+          const sql = this.driver.setLibraryList(libs);
+          await this.conn.query(sql);
+        } catch (err) {
+          process.stderr.write(`[warn] setLibraryList failed: ${err.message}\n`);
+        }
+      }
     }
   }
 
@@ -121,8 +141,50 @@ class ODBCConnection {
     return raw;
   }
 
+  async primaryKeys(table, schema) {
+    const s = schema || this.config.defaultSchema || '';
+    const [schemaName, tableName] = table.includes('.')
+      ? table.split('.')
+      : [s, table];
+    if (!this.driver.primaryKeysSQL) return new Set();
+    const spec = this.driver.primaryKeysSQL(schemaName, tableName);
+    try {
+      const raw = await this.query(spec.sql, spec.params);
+      const rows = spec.mapRow ? raw.rows.map(spec.mapRow).filter(Boolean) : raw.rows;
+      return new Set(rows.map(r => (r.COLUMN_NAME || r.column_name || '').toUpperCase()));
+    } catch (err) {
+      process.stderr.write(`[warn] primaryKeys query failed: ${err.message}\n`);
+      return new Set();
+    }
+  }
+
   paginateSQL(innerSQL, offset, limit) {
     return this.driver.paginateSQL(innerSQL, offset, limit);
+  }
+
+  async setLibraryList(libs) {
+    if (!this.connected) throw new Error('Not connected.');
+    if (!this.driver.setLibraryList) throw new Error(`Library list not supported for ${this.type}.`);
+    const arr = Array.isArray(libs) ? libs : libs.split(',').map(l => l.trim()).filter(Boolean);
+    if (arr.length === 0) throw new Error('Empty library list.');
+
+    // System naming (NAM=1) is required for unqualified table names to resolve
+    // through the library list.  If the current connection was opened without it,
+    // we must reconnect with NAM=1 before setting the library list.
+    const needsReconnect = this.type === 'ibmi' && this.config.namingMode !== 'system' && !this.config.libraryList;
+    if (needsReconnect) {
+      this.config.libraryList = arr;
+      this.config.namingMode  = 'system';
+      await this.conn.close();
+      this.connected = false;
+      const connStr = this.buildConnectionString();
+      this.conn      = await odbc.connect(connStr);
+      this.connected = true;
+    }
+
+    const sql = this.driver.setLibraryList(arr);
+    await this.conn.query(sql);
+    this.config.libraryList = arr;
   }
 
   quoteIdentifier(name) {

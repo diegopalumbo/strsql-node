@@ -101,6 +101,14 @@ class STRSQLSession {
       if (config.defaultSchema) {
         console.log(chalk.dim(` Default schema: ${config.defaultSchema}`));
       }
+      if (config.libraryList) {
+        const libs = Array.isArray(config.libraryList)
+          ? config.libraryList
+          : config.libraryList.split(',').map(l => l.trim()).filter(Boolean);
+        if (libs.length > 0) {
+          console.log(chalk.dim(` Library list: ${libs.join(', ')}`));
+        }
+      }
     } catch (err) {
       console.log(chalk.red(' ✗'));
       const odbcDetail = err.odbcErrors
@@ -249,6 +257,7 @@ class STRSQLSession {
             case '--schema':   connCfg.defaultSchema = args[++i]; break;
             case '--database': connCfg.database      = args[++i]; break;
             case '--port':     connCfg.port          = parseInt(args[++i],10); break;
+            case '--library-list': case '--libl': connCfg.libraryList = args[++i]; break;
             default:           if (!args[i].startsWith('--')) positional.push(args[i]);
           }
         }
@@ -321,6 +330,7 @@ class STRSQLSession {
             case '--service':  pfCfg.serviceName   = pfArgs[++i]; break;
             case '--ssl':      pfCfg.sslMode       = pfArgs[++i]; break;
             case '--naming':   pfCfg.namingMode    = pfArgs[++i]; break;
+            case '--library-list': case '--libl': pfCfg.libraryList = pfArgs[++i]; break;
           }
         }
         if (!pfCfg.type) pfCfg.type = 'ibmi';
@@ -362,6 +372,32 @@ class STRSQLSession {
         break;
       }
 
+      case 'libl': {
+        // \libl [LIB1,LIB2,...]  — show or set IBM i library list
+        if (!this.conn?.isConnected()) { console.error(chalk.red('Not connected.')); break; }
+        if (args.length === 0) {
+          const current = this.conn.config?.libraryList;
+          if (current) {
+            const libs = Array.isArray(current) ? current : current.split(',').map(l => l.trim());
+            console.log(chalk.dim(`Library list: ${libs.join(', ')}`));
+          } else {
+            console.log(chalk.dim('No library list set.'));
+          }
+        } else {
+          const libStr = args.join(',');
+          try {
+            await this.conn.setLibraryList(libStr);
+            const libs = Array.isArray(this.conn.config.libraryList)
+              ? this.conn.config.libraryList
+              : this.conn.config.libraryList.split(',').map(l => l.trim());
+            console.log(chalk.green(`Library list set: ${libs.join(', ')}`));
+          } catch (err) {
+            console.error(chalk.red(`Failed to set library list: ${err.message}`));
+          }
+        }
+        break;
+      }
+
       case 'tables': {
         // \tables [schema]
         if (!this.conn?.isConnected()) { console.error(chalk.red('Not connected.')); break; }
@@ -378,8 +414,15 @@ class STRSQLSession {
         if (!this.conn?.isConnected()) { console.error(chalk.red('Not connected.')); break; }
         const [table, schema] = args;
         if (!table) { console.error(chalk.red('Usage: \\describe [schema.]TABLE')); break; }
-        const result = await this.conn.describeTable(table, schema);
-        console.log(formatTable(result));
+        const [result, pkSet] = await Promise.all([
+          this.conn.describeTable(table, schema),
+          this.conn.primaryKeys(table, schema),
+        ]);
+        result.rows = result.rows.map(row => ({
+          ...row,
+          PK: pkSet.has((row.COLUMN_NAME || '').toUpperCase()) ? '🔑' : '',
+        }));
+        result.columns = [{ name: 'PK' }, ...result.columns];
         break;
       }
 
@@ -808,8 +851,13 @@ class STRSQLSession {
           const cfg = this.conn.config;
           const typeLabel = this.conn.dbLabel || cfg.type || 'ibmi';
           const hostOrDb  = cfg.database || cfg.host || '?';
-          console.log(chalk.green('● Connected') +
-            chalk.dim(`  [${typeLabel}]  host=${hostOrDb}  user=${cfg.username || '?'}  schema=${cfg.defaultSchema || '?'}`));
+          let statusLine = chalk.green('● Connected') +
+            chalk.dim(`  [${typeLabel}]  host=${hostOrDb}  user=${cfg.username || '?'}  schema=${cfg.defaultSchema || '?'}`);
+          if (cfg.libraryList) {
+            const libs = Array.isArray(cfg.libraryList) ? cfg.libraryList : cfg.libraryList.split(',').map(l => l.trim());
+            statusLine += chalk.dim(`  libl=${libs.join(',')}`);
+          }
+          console.log(statusLine);
         } else {
           console.log(chalk.red('● Not connected'));
         }
@@ -836,7 +884,7 @@ class STRSQLSession {
     const META_CMDS = [
       '\\help', '\\quit', '\\connect', '\\disconnect',
       '\\profile', '\\profiles', '\\saveprofile', '\\delprofile',
-      '\\schema', '\\tables', '\\describe',
+      '\\schema', '\\libl', '\\tables', '\\describe',
       '\\export', '\\import', '\\pipe', '\\ddl', '\\drivers', '\\history', '\\hsearch', '\\status', '\\clear',
     ];
 
@@ -865,6 +913,7 @@ ${chalk.bold('Profiles')}
 
 ${chalk.bold('Schema & objects')}
   ${s('\\schema')} [name]                           Show/set default schema
+  ${s('\\libl')} [LIB1,LIB2,...]                    Show/set IBM i library list
   ${s('\\tables')} [schema]                         List tables in a schema
   ${s('\\describe')} [schema.]TABLE                 Describe table columns
 

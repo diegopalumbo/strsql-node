@@ -79,17 +79,19 @@ class ProfileManager {
     const base = name ? this.get(name) : {};
     return {
       type:          base.type || 'ibmi',
-      host:          process.env.STRSQL_HOST     || base.host,
-      username:      process.env.STRSQL_USER     || base.username,
-      password:      process.env.STRSQL_PASSWORD || base.password,
-      defaultSchema: process.env.STRSQL_SCHEMA   || base.defaultSchema,
+      host:          process.env.STRSQL_HOST         || base.host,
+      username:      process.env.STRSQL_USER         || base.username,
+      password:      process.env.STRSQL_PASSWORD     || base.password,
+      defaultSchema: process.env.STRSQL_SCHEMA       || base.defaultSchema,
+      libraryList:   process.env.STRSQL_LIBRARY_LIST || base.libraryList,
       namingMode:    base.namingMode || 'sql',
       ...base,
       // ENV always wins
-      ...(process.env.STRSQL_HOST     && { host:          process.env.STRSQL_HOST }),
-      ...(process.env.STRSQL_USER     && { username:      process.env.STRSQL_USER }),
-      ...(process.env.STRSQL_PASSWORD && { password:      process.env.STRSQL_PASSWORD }),
-      ...(process.env.STRSQL_SCHEMA   && { defaultSchema: process.env.STRSQL_SCHEMA }),
+      ...(process.env.STRSQL_HOST         && { host:          process.env.STRSQL_HOST }),
+      ...(process.env.STRSQL_USER         && { username:      process.env.STRSQL_USER }),
+      ...(process.env.STRSQL_PASSWORD     && { password:      process.env.STRSQL_PASSWORD }),
+      ...(process.env.STRSQL_SCHEMA       && { defaultSchema: process.env.STRSQL_SCHEMA }),
+      ...(process.env.STRSQL_LIBRARY_LIST && { libraryList:   process.env.STRSQL_LIBRARY_LIST }),
     };
   }
 }
