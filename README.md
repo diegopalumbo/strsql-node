@@ -259,6 +259,17 @@ SQL> SELECT ORDNUM, CUSNAM, ORDDAT
   -> FETCH FIRST 20 ROWS ONLY;
 ```
 
+#### Execute SQL from a file
+
+Use `\run` to execute all SQL statements from a file on disk:
+
+```
+SQL> \run /path/to/queries.sql
+SQL> \run updates.sql --stop-on-error
+```
+
+The file is split on `;` delimiters, line comments (`--`) are stripped, and each statement is executed sequentially. By default execution continues on error; use `--stop-on-error` to halt at the first failure. A summary with counts and elapsed time is printed at the end.
+
 ### Export
 
 `\export` writes the **last SELECT result** to a file. Run a `SELECT` first, then call `\export`.

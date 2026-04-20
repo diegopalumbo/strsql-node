@@ -5,6 +5,7 @@ require('dotenv').config();
 const readline = require('readline');
 const chalk    = require('chalk');
 const path     = require('path');
+const fs       = require('fs');
 
 const { IBMiConnection }  = require('../lib/connection');
 const { ProfileManager }  = require('../lib/profiles');
@@ -847,6 +848,96 @@ class STRSQLSession {
         console.clear();
         break;
 
+      case 'run': {
+        // \run <file.sql> [--stop-on-error]
+        // Read a SQL file from disk and execute each statement sequentially.
+        if (args.length === 0) {
+          console.error(chalk.red('Usage: \\run <file.sql> [--stop-on-error]'));
+          break;
+        }
+        if (!this.conn?.isConnected()) {
+          console.error(chalk.red('Not connected. Use \\connect or \\profile first.'));
+          break;
+        }
+
+        let filePath = null;
+        let stopOnError = false;
+        for (const a of args) {
+          if (a === '--stop-on-error') stopOnError = true;
+          else if (!a.startsWith('--')) filePath = a;
+        }
+        if (!filePath) {
+          console.error(chalk.red('Specify a SQL file path.'));
+          break;
+        }
+
+        const absPath = path.resolve(filePath);
+        if (!fs.existsSync(absPath)) {
+          console.error(chalk.red(`File not found: ${absPath}`));
+          break;
+        }
+
+        const content = fs.readFileSync(absPath, 'utf8');
+        // Split on semicolons, strip comments (-- line comments)
+        const statements = content
+          .split(/;\s*(?:\r?\n|$)/)
+          .map(s => s.replace(/--.*$/gm, '').trim())
+          .filter(s => s.length > 0 && !/^\s*$/.test(s));
+
+        if (statements.length === 0) {
+          console.log(chalk.dim('No SQL statements found in file.'));
+          break;
+        }
+
+        console.log(chalk.dim(`\n  Executing ${statements.length} statement(s) from ${path.basename(absPath)}…\n`));
+
+        let executed = 0;
+        let errors   = 0;
+        const startTime = Date.now();
+
+        for (let i = 0; i < statements.length; i++) {
+          const sql = statements[i];
+          const label = `[${i + 1}/${statements.length}]`;
+
+          try {
+            const upper = sql.trim().toUpperCase();
+            const isSelect =
+              upper.startsWith('SELECT') ||
+              upper.startsWith('WITH') ||
+              upper.startsWith('VALUES');
+
+            if (isSelect) {
+              const result = await this.conn.query(sql);
+              this.lastResult = result;
+              console.log(chalk.dim(`${label} SELECT → ${result.rowCount} row(s)`));
+              console.log(formatTable(result, { maxCellWidth: this.opts.maxCellWidth || 40 }));
+            } else {
+              const result = await this.conn.execute(sql);
+              this.lastResult = result;
+              console.log(chalk.dim(`${label}`) + ' ' + formatExecResult(result));
+            }
+            executed++;
+          } catch (err) {
+            errors++;
+            console.error(chalk.red(`${label} Error: ${err.message}`));
+            if (err.odbcErrors) {
+              for (const e of err.odbcErrors) {
+                console.error(chalk.dim(`  [${e.state}] ${e.message}`));
+              }
+            }
+            console.error(chalk.dim(`  SQL: ${sql.slice(0, 120)}${sql.length > 120 ? '…' : ''}`));
+            if (stopOnError) {
+              console.error(chalk.yellow('  Stopped on error (--stop-on-error).'));
+              break;
+            }
+          }
+        }
+
+        const elapsed = Date.now() - startTime;
+        console.log(chalk.dim(`\n  Done: ${executed} executed, ${errors} error(s), ${elapsed} ms\n`));
+        break;
+      }
+
       case 'status': {
         if (this.conn?.isConnected()) {
           const cfg = this.conn.config;
@@ -886,7 +977,7 @@ class STRSQLSession {
       '\\help', '\\quit', '\\connect', '\\disconnect',
       '\\profile', '\\profiles', '\\saveprofile', '\\delprofile',
       '\\schema', '\\libl', '\\tables', '\\describe',
-      '\\export', '\\import', '\\pipe', '\\ddl', '\\drivers', '\\history', '\\hsearch', '\\status', '\\clear',
+      '\\export', '\\import', '\\pipe', '\\ddl', '\\run', '\\drivers', '\\history', '\\hsearch', '\\status', '\\clear',
     ];
 
     const all = [...SQL_KEYWORDS, ...META_CMDS];
@@ -921,6 +1012,7 @@ ${chalk.bold('Schema & objects')}
 ${chalk.bold('SQL execution')}
   ${d('Enter SQL and end with ; or type GO/RUN on its own line')}
   ${d('Multi-line input supported — press Enter to continue')}
+  ${s('\\run')} <file.sql> ${d('[--stop-on-error]')}     Execute SQL from a file
 
 ${chalk.bold('Export')}
   ${s('\\export')} <file.csv>                        Export last result as CSV
