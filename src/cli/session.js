@@ -759,11 +759,14 @@ class STRSQLSession {
             if (dropIfExists) {
               try { await this.conn.execute(`DROP TABLE ${ddlTarget}`); } catch {}
             }
-            await this.conn.execute(ddl);
+            await this.conn.execute(ddl.replace(/;\s*$/, ''));
             console.log(chalk.green(`✓ Table ${ddlTarget} created.`));
           }
         } catch (err) {
-          console.error(chalk.red(err.message));
+          const odbcDetail = err.odbcErrors
+            ? '\n  ' + err.odbcErrors.map(e => `[${e.state}] ${e.message}`).join('\n  ')
+            : '';
+          console.error(chalk.red(err.message + odbcDetail));
         }
         break;
       }
