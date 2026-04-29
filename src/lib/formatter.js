@@ -13,39 +13,69 @@ const MAX_CELL_WIDTH = 40;
  */
 function formatTable(result, opts = {}) {
   const { columns, rows, rowCount, elapsed, statement } = result;
+  const effectiveRowCount = Number.isInteger(rowCount) && rowCount >= 0
+    ? rowCount
+    : Array.isArray(rows) ? rows.length : 0;
   const maxWidth = opts.maxCellWidth || MAX_CELL_WIDTH;
+  const plain = Boolean(opts.plain);
+  const asciiBorders = Boolean(opts.asciiBorders);
 
   if (!columns || columns.length === 0) {
-    return chalk.yellow(`(${rowCount} row${rowCount !== 1 ? 's' : ''} affected) — ${elapsed}ms`);
+    const msg = `(${effectiveRowCount} row${effectiveRowCount !== 1 ? 's' : ''} affected) - ${elapsed}ms`;
+    return plain ? msg : chalk.yellow(`(${effectiveRowCount} row${effectiveRowCount !== 1 ? 's' : ''} affected) — ${elapsed}ms`);
   }
 
   const headers = columns.map(c =>
-    chalk.bold.cyan(truncate(c.name, maxWidth))
+    plain
+      ? truncate(c.name, maxWidth, { ascii: true })
+      : chalk.bold.cyan(truncate(c.name, maxWidth))
   );
 
-  const table = new Table({
+  const tableOpts = {
     head: headers,
     style: {
       head: [],
-      border: ['gray'],
+      border: plain ? [] : ['gray'],
     },
     wordWrap: false,
-  });
+  };
+
+  if (asciiBorders) {
+    tableOpts.chars = {
+      top: '-',
+      'top-mid': '+',
+      'top-left': '+',
+      'top-right': '+',
+      bottom: '-',
+      'bottom-mid': '+',
+      'bottom-left': '+',
+      'bottom-right': '+',
+      left: '|',
+      'left-mid': '+',
+      mid: '-',
+      'mid-mid': '+',
+      right: '|',
+      'right-mid': '+',
+      middle: '|',
+    };
+  }
+
+  const table = new Table(tableOpts);
 
   for (const row of rows) {
     const cells = columns.map(c => {
       const val = row[c.name];
-      if (val === null || val === undefined) return chalk.dim('NULL');
-      return truncate(String(val), maxWidth);
+      if (val === null || val === undefined) return plain ? 'NULL' : chalk.dim('NULL');
+      return truncate(String(val), maxWidth, { ascii: plain || asciiBorders });
     });
     table.push(cells);
   }
 
   const lines = [table.toString()];
   lines.push(
-    chalk.dim(
-      `${rowCount} row${rowCount !== 1 ? 's' : ''} — ${elapsed}ms`
-    )
+    plain
+      ? `${effectiveRowCount} row${effectiveRowCount !== 1 ? 's' : ''} - ${elapsed}ms`
+      : chalk.dim(`${effectiveRowCount} row${effectiveRowCount !== 1 ? 's' : ''} — ${elapsed}ms`)
   );
   return lines.join('\n');
 }
@@ -228,8 +258,12 @@ function exportToFile(result, filePath, opts = {}) {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-function truncate(str, max) {
+function truncate(str, max, opts = {}) {
   if (str.length <= max) return str;
+  if (opts.ascii) {
+    if (max <= 3) return '.'.repeat(Math.max(0, max));
+    return str.slice(0, max - 3) + '...';
+  }
   return str.slice(0, max - 1) + '…';
 }
 

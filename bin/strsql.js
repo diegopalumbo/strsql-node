@@ -27,7 +27,7 @@ program
   .option('--password <password>', 'Password (prefer STRSQL_PASSWORD env var)')
   .option('-s, --schema <schema>', 'Default schema/library')
   .option('-l, --library-list <libs>', 'IBM i library list (comma-separated)')
-  .option('--max-cell-width <n>',  'Max column width in table output', '40')
+  .option('--max-cell-width <n>',  'Max column width in table output (default: auto)')
   .action(async (opts) => {
     // CLI flags override ENV and profile
     if (opts.host)        process.env.STRSQL_HOST         = opts.host;
@@ -38,7 +38,7 @@ program
 
     const session = new STRSQLSession({
       profile:      opts.profile,
-      maxCellWidth: parseInt(opts.maxCellWidth, 10),
+      maxCellWidth: opts.maxCellWidth ? parseInt(opts.maxCellWidth, 10) : undefined,
     });
 
     await session.start(opts.profile);
