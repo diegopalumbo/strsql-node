@@ -15,6 +15,7 @@ const { Importer, ERROR_MODE } = require('../lib/importer');
 const { Pipe, generateDDL }    = require('../lib/pipe');
 const { listDrivers }          = require('../lib/drivers');
 const { ProgressBar }          = require('./progress');
+const { printWithPager, prefersAsciiOutput, shouldUsePager } = require('../lib/pager');
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -63,6 +64,47 @@ class STRSQLSession {
     this.buffer = [];       // multi-line SQL buffer
     this.lastResult = null; // for post-query export
     this.rl = null;
+  }
+
+  async _printResult(text, opts = {}) {
+    if (!this.rl) {
+      await printWithPager(text, opts);
+      return;
+    }
+
+    this.rl.pause();
+    try {
+      await printWithPager(text, opts);
+    } finally {
+      this.rl.resume();
+    }
+  }
+
+  _tableOpts(usePager) {
+    const degrade = prefersAsciiOutput();
+    const explicitWidth = Number.isFinite(this.opts.maxCellWidth) && this.opts.maxCellWidth > 0
+      ? this.opts.maxCellWidth
+      : null;
+
+    const autoWidth = usePager ? Number.MAX_SAFE_INTEGER : 40;
+
+    return {
+      maxCellWidth: explicitWidth || autoWidth,
+      asciiBorders: degrade,
+      plain: degrade,
+    };
+  }
+
+  _formatTableForDisplay(result) {
+    const compact = formatTable(result, this._tableOpts(false));
+    if (!shouldUsePager(compact)) {
+      return { text: compact, forcePager: false };
+    }
+
+    return {
+      text: formatTable(result, this._tableOpts(true)),
+      forcePager: true,
+    };
   }
 
   // ── bootstrap ──────────────────────────────────────────────────────────────
@@ -210,7 +252,10 @@ class STRSQLSession {
       if (isSelect) {
         const result = await this.conn.query(sql);
         this.lastResult = result;
-        console.log(formatTable(result, { maxCellWidth: this.opts.maxCellWidth || 40 }));
+        // ── CHANGED: pipe table output through less ──────────────────────────
+        const formatted = this._formatTableForDisplay(result);
+        await this._printResult(formatted.text, { force: formatted.forcePager });
+        // ────────────────────────────────────────────────────────────────────
       } else {
         const result = await this.conn.execute(sql);
         this.lastResult = result;
@@ -245,8 +290,6 @@ class STRSQLSession {
         break;
 
       case 'connect': {
-        // \connect <host> [user] [password] [schema] [--type sqlserver|postgresql|mysql|oracle|db2|sqlite|ibmi]
-        // Or: \connect --type postgresql --host h --user u --password p --database db --schema s
         let connCfg = {};
         const positional = [];
         for (let i = 0; i < args.length; i++) {
@@ -262,7 +305,6 @@ class STRSQLSession {
             default:           if (!args[i].startsWith('--')) positional.push(args[i]);
           }
         }
-        // Positional fallback for backward compat: host user password schema
         if (positional[0] && !connCfg.host)          connCfg.host          = positional[0];
         if (positional[1] && !connCfg.username)       connCfg.username      = positional[1];
         if (positional[2] && !connCfg.password)       connCfg.password      = positional[2];
@@ -278,7 +320,6 @@ class STRSQLSession {
       }
 
       case 'profile': {
-        // \profile <name>
         const [pname] = args;
         if (!pname) { console.error(chalk.red('Usage: \\profile <name>')); break; }
         if (this.conn) await this.conn.disconnect().catch(() => {});
@@ -304,11 +345,6 @@ class STRSQLSession {
       }
 
       case 'saveprofile': {
-        // \saveprofile <n> --type TYPE --host H [--user U] [--password P]
-        //                  [--schema S] [--database DB] [--port N]
-        //                  [--instance I]  (SQL Server named instance)
-        //                  [--service S]   (Oracle service name)
-        //                  [--ssl MODE]    (PostgreSQL ssl mode)
         const [pname, ...pfArgs] = args;
         if (!pname) {
           console.error(chalk.red(
@@ -359,7 +395,6 @@ class STRSQLSession {
       }
 
       case 'schema': {
-        // \schema [name]  — show or set default schema
         const [schema] = args;
         if (!schema) {
           console.log(chalk.dim(`Current schema: ${this.conn?.config?.defaultSchema || '(none)'}`));
@@ -374,7 +409,6 @@ class STRSQLSession {
       }
 
       case 'libl': {
-        // \libl [LIB1,LIB2,...]  — show or set IBM i library list
         if (!this.conn?.isConnected()) { console.error(chalk.red('Not connected.')); break; }
         if (args.length === 0) {
           const current = this.conn.config?.libraryList;
@@ -400,18 +434,18 @@ class STRSQLSession {
       }
 
       case 'tables': {
-        // \tables [schema]
         if (!this.conn?.isConnected()) { console.error(chalk.red('Not connected.')); break; }
         const schema = args[0] || this.conn.config.defaultSchema;
         if (!schema) { console.error(chalk.red('Specify a schema: \\tables <schema>')); break; }
         const result = await this.conn.listTables(schema);
-        console.log(formatTable(result));
+        // ── CHANGED: pipe \tables output through less too ────────────────────
+        const formatted = this._formatTableForDisplay(result);
+        await this._printResult(formatted.text, { force: formatted.forcePager });
         break;
       }
 
       case 'describe':
       case 'desc': {
-        // \describe [schema.]TABLE
         if (!this.conn?.isConnected()) { console.error(chalk.red('Not connected.')); break; }
         const [table, schema] = args;
         if (!table) { console.error(chalk.red('Usage: \\describe [schema.]TABLE')); break; }
@@ -424,23 +458,13 @@ class STRSQLSession {
           PK: pkSet.has((row.COLUMN_NAME || '').toUpperCase()) ? '🔑' : '',
         }));
         result.columns = [{ name: 'PK' }, ...result.columns];
-        console.log(formatTable(result));
+        // describe output is rarely long enough to need paging, but keep consistent
+        const formatted = this._formatTableForDisplay(result);
+        await this._printResult(formatted.text, { force: formatted.forcePager });
         break;
       }
 
       case 'export': {
-        // \export <file> [--table SCHEMA.TABLE] [--keys COL1,COL2] [--batch N]
-        //
-        // Format is auto-detected from extension:
-        //   .csv            → CSV
-        //   .json           → JSON
-        //   .sql            → INSERT (default)
-        //   .insert.sql     → INSERT  (explicit)
-        //   .merge.sql      → MERGE
-        //
-        // For MERGE, --keys is required.
-        // For multi-row INSERT, --batch N bundles N rows per statement.
-
         if (args.length === 0) {
           console.error(chalk.red(
             'Usage: \\export <file> [--table SCHEMA.TABLE] [--keys COL1,COL2] [--batch N]'
@@ -453,7 +477,6 @@ class STRSQLSession {
           break;
         }
 
-        // Parse args: first positional = filePath, rest = flags
         let filePath = null;
         const exportOpts = {};
 
@@ -474,17 +497,14 @@ class STRSQLSession {
           break;
         }
 
-        // Detect mode from double extension (.insert.sql / .merge.sql)
         const base = path.basename(filePath).toLowerCase();
         if (base.endsWith('.merge.sql'))  exportOpts.sqlMode = 'merge';
         if (base.endsWith('.insert.sql')) exportOpts.sqlMode = 'insert';
 
-        // Default table name to filename stem (e.g. movimenti.sql → movimenti)
         if (!exportOpts.table) {
           exportOpts.table = path.basename(filePath).replace(/(\.(insert|merge))?\.sql$/i, '').replace(/\.(csv|json)$/i, '') || 'TARGET_TABLE';
         }
 
-        // Warn if MERGE but no keys
         if (exportOpts.sqlMode === 'merge' && (!exportOpts.keys || exportOpts.keys.length === 0)) {
           console.error(chalk.red(
             'MERGE export requires --keys. E.g.: \\export out.merge.sql --table MYLIB.ORDERS --keys ORDNUM'
@@ -509,16 +529,6 @@ class STRSQLSession {
       }
 
       case 'import': {
-        // \import <file> --table SCHEMA.TABLE [--mode abort|skip|confirm]
-        //                [--batch N] [--dry-run]
-        //                [--map srcCol=destCol,src2=dest2]
-        //                [--delimiter ,]
-        //
-        // Format auto-detected from extension:
-        //   .csv / .tsv        → CSV import
-        //   .json              → JSON import
-        //   .sql / *.insert.sql / *.merge.sql → SQL statement import
-
         if (args.length === 0) {
           console.error(chalk.red(
             'Usage: \\import <file> [--table SCHEMA.TABLE] [--mode abort|skip|confirm]\n' +
@@ -533,7 +543,6 @@ class STRSQLSession {
           break;
         }
 
-        // ── Parse args ────────────────────────────────────────────────────────
         let filePath = null;
         const importOpts = {
           errorMode: ERROR_MODE.ABORT,
@@ -551,7 +560,6 @@ class STRSQLSession {
             case '--dry-run':   importOpts.dryRun    = true; break;
             case '--delimiter': importOpts.delimiter = args[++i]; break;
             case '--map': {
-              // --map OLDCOL=NEWCOL,OLDCOL2=NEWCOL2
               const pairs = (args[++i] || '').split(',');
               for (const pair of pairs) {
                 const [src, dest] = pair.split('=');
@@ -574,7 +582,6 @@ class STRSQLSession {
 
         importOpts.onProgress = (done, total) => bar.tick(done, total);
 
-        // Confirm mode: pause REPL and ask interactively
         if (importOpts.errorMode === ERROR_MODE.CONFIRM) {
           importOpts.onConfirm = async (rowIdx, errMsg, sql) => {
             this.rl.pause();
@@ -620,32 +627,6 @@ class STRSQLSession {
       }
 
       case 'pipe': {
-        // \pipe <src-table> --target-profile <p> [options]
-        //
-        // Transfer rows from current connection (source) to a target DB2.
-        //
-        // Required:
-        //   --target-profile <n>       use saved profile for target connection
-        //   OR
-        //   --target-host <h> [--target-user u] [--target-password p] [--target-schema s]
-        //
-        // Table:
-        //   First positional arg = source table  (e.g. SRCLIB.ORDERS)
-        //   --target-table TGTLIB.ORDERS          (default: same as source)
-        //   --sql "SELECT ..."                    override source SELECT
-        //   --where "ACTIVE=1"                    append WHERE to source
-        //
-        // Transfer:
-        //   --mode insert|merge      (default: insert)
-        //   --keys  COL1,COL2        required for merge
-        //   --batch N                rows per page (default: 500)
-        //   --map   srcCol=destCol,… rename/exclude columns
-        //   --truncate               DELETE FROM target before pipe
-        //   --ddl                    CREATE TABLE on target from source schema
-        //   --drop-if-exists         DROP TABLE before --ddl
-        //   --mode-on-error skip     skip rows with errors (default: abort)
-        //   --dry-run                fetch source, skip writes
-
         if (!this.conn?.isConnected()) {
           console.error(chalk.red('Source not connected. Use \\connect or \\profile first.'));
           break;
@@ -661,7 +642,6 @@ class STRSQLSession {
           break;
         }
 
-        // ── parse args ───────────────────────────────────────────────────────
         let sourceTable = null;
         const pipeOpts  = {
           mode: 'insert', batchSize: 500,
@@ -707,7 +687,6 @@ class STRSQLSession {
           break;
         }
 
-        // ── resolve target connection ─────────────────────────────────────────
         let targetConn = null;
         try {
           let targetConfig;
@@ -731,7 +710,6 @@ class STRSQLSession {
           break;
         }
 
-        // ── run pipe ─────────────────────────────────────────────────────────
         pipeOpts.sourceTable = sourceTable;
         if (!pipeOpts.targetTable) pipeOpts.targetTable = sourceTable;
 
@@ -769,8 +747,6 @@ class STRSQLSession {
       }
 
       case 'ddl': {
-        // \ddl [schema.]TABLE [--target-table T] [--exec] [--drop-if-exists]
-        // Generate DDL from QSYS2.SYSCOLUMNS; optionally execute on current conn.
         if (!this.conn?.isConnected()) { console.error(chalk.red('Not connected.')); break; }
 
         const [srcTable, ...ddlRest] = args;
@@ -816,7 +792,6 @@ class STRSQLSession {
         break;
       }
 
-
       case 'drivers': {
         const { listDrivers: _ld } = require('../lib/drivers');
         console.log(chalk.bold('\nSupported database types:\n'));
@@ -836,7 +811,6 @@ class STRSQLSession {
       }
 
       case 'hsearch': {
-        // \hsearch <keyword>
         const kw = args.join(' ');
         const found = this.history.search(kw);
         if (found.length === 0) { console.log(chalk.dim(`No history matching "${kw}".`)); break; }
@@ -849,8 +823,6 @@ class STRSQLSession {
         break;
 
       case 'run': {
-        // \run <file.sql> [--stop-on-error]
-        // Read a SQL file from disk and execute each statement sequentially.
         if (args.length === 0) {
           console.error(chalk.red('Usage: \\run <file.sql> [--stop-on-error]'));
           break;
@@ -878,7 +850,6 @@ class STRSQLSession {
         }
 
         const content = fs.readFileSync(absPath, 'utf8');
-        // Split on semicolons, strip comments (-- line comments)
         const statements = content
           .split(/;\s*(?:\r?\n|$)/)
           .map(s => s.replace(/--.*$/gm, '').trim())
@@ -910,7 +881,10 @@ class STRSQLSession {
               const result = await this.conn.query(sql);
               this.lastResult = result;
               console.log(chalk.dim(`${label} SELECT → ${result.rowCount} row(s)`));
-              console.log(formatTable(result, { maxCellWidth: this.opts.maxCellWidth || 40 }));
+              // ── CHANGED: pipe \run SELECT results through less too ──────────
+              const formatted = this._formatTableForDisplay(result);
+              await this._printResult(formatted.text, { force: formatted.forcePager });
+              // ────────────────────────────────────────────────────────────────
             } else {
               const result = await this.conn.execute(sql);
               this.lastResult = result;
@@ -956,6 +930,41 @@ class STRSQLSession {
         break;
       }
 
+      // ── NEW: \nopager — toggle pager off for the session ──────────────────
+      case 'nopager': {
+        process.env.STRSQL_NO_PAGER = '1';
+        console.log(chalk.dim('Pager disabled for this session. Use \\pager to re-enable.'));
+        break;
+      }
+
+      // ── NEW: \pager — toggle pager back on ───────────────────────────────
+      case 'pager': {
+        delete process.env.STRSQL_NO_PAGER;
+        const { detectPager } = require('../lib/pager');
+        const p = detectPager();
+        if (p) {
+          console.log(chalk.dim(`Pager enabled (${p}).`));
+        } else {
+          console.log(chalk.yellow('No pager found on this system (less/more/most).'));
+        }
+        break;
+      }
+
+      case 'pagerstatus': {
+        const { pagerDebugInfo } = require('../lib/pager');
+        const info = pagerDebugInfo();
+        console.log(chalk.bold('\nPager status:'));
+        console.log(`  pager:        ${info.pager || '(none)'}`);
+        console.log(`  pagerName:    ${info.pagerName || '(none)'}`);
+        console.log(`  args:         ${info.args.length ? info.args.join(' ') : '(none)'}`);
+        console.log(`  interactive:  ${info.interactive ? 'yes' : 'no'}`);
+        console.log(`  ascii mode:   ${info.ascii ? 'yes' : 'no'}`);
+        console.log(`  env PAGER:    ${info.envPager || '(unset)'}`);
+        console.log(`  env LESS:     ${info.envLess || '(unset)'}`);
+        console.log();
+        break;
+      }
+
       default:
         console.error(chalk.red(`Unknown command: \\${verb}. Type \\help for help.`));
     }
@@ -977,7 +986,9 @@ class STRSQLSession {
       '\\help', '\\quit', '\\connect', '\\disconnect',
       '\\profile', '\\profiles', '\\saveprofile', '\\delprofile',
       '\\schema', '\\libl', '\\tables', '\\describe',
-      '\\export', '\\import', '\\pipe', '\\ddl', '\\run', '\\drivers', '\\history', '\\hsearch', '\\status', '\\clear',
+      '\\export', '\\import', '\\pipe', '\\ddl', '\\run',
+      '\\drivers', '\\history', '\\hsearch', '\\status', '\\clear',
+      '\\pager', '\\nopager', '\\pagerstatus',
     ];
 
     const all = [...SQL_KEYWORDS, ...META_CMDS];
@@ -1020,45 +1031,32 @@ ${chalk.bold('Export')}
   ${s('\\export')} <file.sql>                        Export as SQL INSERTs
   ${s('\\export')} <file.insert.sql> ${d('[--table T] [--batch N]')}
   ${s('\\export')} <file.merge.sql>  ${d('--keys COL1,COL2 [--table T]')}
-  ${d('--table SCHEMA.TABLE  override target table name')}
-  ${d('--keys  COL1,COL2     join key columns (MERGE only)')}
-  ${d('--batch N             rows per INSERT statement (default 1)')}
 
 ${chalk.bold('Import')}
   ${s('\\import')} <file.csv>   ${d('--table SCHEMA.TABLE')}
-  ${s('\\import')} <file.json>  ${d('[--table T]  (or "table" key inside JSON)')}
-  ${s('\\import')} <file.sql>   ${d('(INSERT/MERGE statements)')}
-  ${d('--table  SCHEMA.TABLE          target table (required for CSV/JSON)')}
-  ${d('--mode   abort|skip|confirm    error handling (default: abort)')}
-  ${d('--batch  N                     rows per commit (default: 100)')}
-  ${d('--dry-run                      parse + validate without writing')}
-  ${d('--map    srcCol=DESTCOL,...    rename/filter columns (CSV/JSON)')}
-  ${d('--delimiter CHAR               CSV delimiter (default: ,)')}
+  ${s('\\import')} <file.json>  ${d('[--table T]')}
+  ${s('\\import')} <file.sql>
 
 ${chalk.bold('DB2 → DB2 Pipe')}
   ${s('\\pipe')} <src-table> ${d('--target-profile <n>  [--target-table T]')}
-  ${s('\\pipe')} ${d('--sql "SELECT ..." --target-host h --target-user u --target-password p')}
-  ${d('--mode         insert|merge       transfer mode (default: insert)')}
-  ${d('--keys         COL1,COL2          join keys for MERGE')}
-  ${d('--batch        N                  rows per page (default: 500)')}
-  ${d('--truncate                        DELETE FROM target before pipe')}
-  ${d('--ddl                             CREATE TABLE on target from source schema')}
-  ${d('--drop-if-exists                  DROP TABLE before --ddl')}
-  ${d('--map          srcCol=DESTCOL,…   rename/exclude columns')}
-  ${d('--where        "condition"        filter rows on source')}
-  ${d('--mode-on-error skip              skip bad rows instead of aborting')}
-  ${d('--dry-run                         fetch source only, no writes')}
 
 ${chalk.bold('DDL')}
   ${s('\\ddl')} <table> ${d('[--target-table T] [--exec] [--drop-if-exists]')}
-  ${d('Generate CREATE TABLE DDL from QSYS2.SYSCOLUMNS; --exec runs it on current conn.')}
 
 ${chalk.bold('History')}
   ${s('\\history')}                                 Show last 20 commands
   ${s('\\hsearch')} <keyword>                       Search command history
   ${d('Use ↑ ↓ arrow keys to navigate history')}
 
+${chalk.bold('Pager')}
+  ${d('Results are automatically shown via less (scroll with ← → ↑ ↓, q to exit)')}
+  ${s('\\nopager')}                                 Disable pager for this session
+  ${s('\\pager')}                                   Re-enable pager
+  ${s('\\pagerstatus')}                             Show pager diagnostics
+  ${d('Set STRSQL_NO_PAGER=1 to disable permanently')}
+
 ${chalk.bold('Other')}
+  ${s('\\drivers')}                                 List supported DB types
   ${s('\\clear')}                                   Clear screen
   ${s('\\quit')} or ${s('\\exit')}                             Exit
 `);

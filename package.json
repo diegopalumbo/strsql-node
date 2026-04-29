@@ -1,15 +1,16 @@
 {
   "name": "strsql-node",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "STRSQL session emulator for Node.js via ODBC and more",
   "main": "src/lib/index.js",
   "bin": {
-    "strsql": "./bin/strsql.js"
+    "strsql": "bin/strsql.js"
   },
   "type": "commonjs",
   "scripts": {
     "start": "node bin/strsql.js",
-    "test": "node test/basic.js"
+    "test": "node test/basic.js",
+    "publish": "npm publish --access public"
   },
   "keywords": [
     "ibm-i",
