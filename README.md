@@ -49,6 +49,7 @@
 - [Dialect reference](#dialect-reference)
 - [File layout](#file-layout)
 - [Security notes](#security-notes)
+- [Publishing to npm](#publishing-to-npm)
 - [License](#license)
 
 ---
@@ -105,6 +106,29 @@ Or run directly without installing:
 node bin/strsql.js [command] [options]
 ```
 
+## Publishing to npm
+
+Use the package script to publish the current version to npm:
+
+```bash
+npm run publish:npm
+```
+
+Typical release flow:
+
+```bash
+# 1) run tests
+npm test
+
+# 2) bump version
+npm version patch
+
+# 3) publish
+npm run publish:npm
+```
+
+Note: make sure you are logged in with `npm login` and have publish rights on `strsql-node`.
+
 ---
 
 ## Environment variables
@@ -130,7 +154,7 @@ Profiles are stored in `~/.strsql-node/profiles.json`. Each profile carries the 
 strsql profiles list
 
 # Add profiles for different databases
-strsql profiles add ibmi-prod  --type ibmi       --host 10.0.0.1  -u PRODUSER --password s3c -s PRODLIB -l PRODLIB,QGPL,QUSRSYS
+strsql profiles add ibmi-prod  --type ibmi        --host 10.0.0.1  -u PRODUSER --password s3c -s PRODLIB -l PRODLIB,QGPL,QUSRSYS
 strsql profiles add pg-sales   --type postgresql  --host pg.local  -u admin    --password s3c --database sales --schema public --ssl require
 strsql profiles add ss-dev     --type sqlserver   --host ss.local  -u sa       --password s3c --database DevDB --instance DEV
 strsql profiles add ora-uat    --type oracle      --host ora.local -u SYS      --password s3c --service ORCL
