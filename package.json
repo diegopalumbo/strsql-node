@@ -1,6 +1,6 @@
 {
   "name": "strsql-node",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "STRSQL session emulator for Node.js via ODBC and more",
   "main": "src/lib/index.js",
   "bin": {
