@@ -56,7 +56,8 @@ const DRIVERS = {
     describeSQL(schema, table) {
       return {
         sql: `SELECT COLUMN_NAME, DATA_TYPE, LENGTH, NUMERIC_SCALE, IS_NULLABLE, 
-              COLUMN_DEFAULT, COLUMN_HEADING
+              COLUMN_DEFAULT,
+              COALESCE(NULLIF(TRIM(COLUMN_HEADING), ''), COLUMN_TEXT) AS COLUMN_HEADING
               FROM QSYS2.SYSCOLUMNS
               WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
               ORDER BY ORDINAL_POSITION`,
