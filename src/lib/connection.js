@@ -3,6 +3,19 @@
 const odbc      = require('odbc');
 const { getDriver } = require('./drivers');
 
+function parseLibraryList(libs) {
+  if (!libs) return [];
+  const raw = Array.isArray(libs) ? libs.join(',') : String(libs);
+  const parts = raw
+    .trim()
+    .replace(/^[[(]\s*/, '')
+    .replace(/\s*[\])]$/, '')
+    .split(/[,\s]+/)
+    .map(l => l.trim().replace(/^["'`]+|["'`]+$/g, ''))
+    .filter(Boolean);
+  return parts[0]?.toLowerCase() === 'set' ? parts.slice(1) : parts;
+}
+
 /**
  * Universal ODBC connection wrapper.
  * Supports any database type defined in drivers.js.
@@ -62,13 +75,10 @@ class ODBCConnection {
 
     // IBM i library list: run CHGLIBL after connect
     if (hasLibraryList) {
-      const libs = Array.isArray(this.config.libraryList)
-        ? this.config.libraryList
-        : this.config.libraryList.split(',').map(l => l.trim()).filter(Boolean);
+      const libs = parseLibraryList(this.config.libraryList);
       if (libs.length > 0) {
         try {
-          const sql = this.driver.setLibraryList(libs);
-          await this.conn.query(sql);
+          await this.setLibraryList(libs);
         } catch (err) {
           process.stderr.write(`[warn] setLibraryList failed: ${err.message}\n`);
         }
@@ -130,7 +140,7 @@ class ODBCConnection {
     if (this.type !== 'ibmi') return '';
     const libs = this.config.libraryList;
     if (!libs || (Array.isArray(libs) && libs.length === 0)) return '';
-    const arr = Array.isArray(libs) ? libs : libs.split(',').map(l => l.trim()).filter(Boolean);
+    const arr = parseLibraryList(libs);
     const placeholders = arr.map(() => '?').join(',');
     const result = await this.query(
       `SELECT TABLE_SCHEMA FROM QSYS2.SYSTABLES WHERE TABLE_NAME = ? AND TABLE_SCHEMA IN (${placeholders}) FETCH FIRST 1 ROWS ONLY`,
@@ -190,10 +200,30 @@ class ODBCConnection {
     return this.driver.paginateSQL(innerSQL, offset, limit);
   }
 
+  async _libraryListInfo() {
+    if (this.type !== 'ibmi') return { current: '', user: [] };
+    try {
+      const result = await this.query(
+        `SELECT SYSTEM_SCHEMA_NAME, TYPE
+         FROM QSYS2.LIBRARY_LIST_INFO
+         WHERE TYPE IN ('CURRENT', 'USER')
+         ORDER BY ORDINAL_POSITION`
+      );
+      const currentRow = result.rows.find(r => String(r.TYPE || '').toUpperCase() === 'CURRENT');
+      const userRows = result.rows.filter(r => String(r.TYPE || '').toUpperCase() === 'USER');
+      return {
+        current: currentRow?.SYSTEM_SCHEMA_NAME || '',
+        user: userRows.map(r => r.SYSTEM_SCHEMA_NAME).filter(Boolean),
+      };
+    } catch {
+      return { current: '', user: [] };
+    }
+  }
+
   async setLibraryList(libs) {
     if (!this.connected) throw new Error('Not connected.');
     if (!this.driver.setLibraryList) throw new Error(`Library list not supported for ${this.type}.`);
-    const arr = Array.isArray(libs) ? libs : libs.split(',').map(l => l.trim()).filter(Boolean);
+    const arr = parseLibraryList(libs);
     if (arr.length === 0) throw new Error('Empty library list.');
 
     // System naming (NAM=1) is required for unqualified table names to resolve
@@ -212,7 +242,9 @@ class ODBCConnection {
 
     const sql = this.driver.setLibraryList(arr);
     await this.conn.query(sql);
-    this.config.libraryList = arr;
+    const info = await this._libraryListInfo();
+    if (info.current && !this.config.defaultSchema) this.config.defaultSchema = info.current;
+    this.config.libraryList = info.user.length > 0 ? info.user : arr;
   }
 
   quoteIdentifier(name) {
@@ -227,4 +259,4 @@ class ODBCConnection {
 // backward-compat alias — new IBMiConnection(config) still works unchanged
 const IBMiConnection = ODBCConnection;
 
-module.exports = { ODBCConnection, IBMiConnection };
+module.exports = { ODBCConnection, IBMiConnection, parseLibraryList };

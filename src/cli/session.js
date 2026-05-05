@@ -7,7 +7,7 @@ const chalk    = require('chalk');
 const path     = require('path');
 const fs       = require('fs');
 
-const { IBMiConnection }  = require('../lib/connection');
+const { IBMiConnection, parseLibraryList } = require('../lib/connection');
 const { ProfileManager }  = require('../lib/profiles');
 const { HistoryManager }  = require('../lib/history');
 const { formatTable, formatExecResult, exportToFile, toInsert, toMerge } = require('../lib/formatter');
@@ -147,9 +147,7 @@ class STRSQLSession {
         console.log(chalk.dim(` Default schema: ${config.defaultSchema}`));
       }
       if (config.libraryList) {
-        const libs = Array.isArray(config.libraryList)
-          ? config.libraryList
-          : config.libraryList.split(',').map(l => l.trim()).filter(Boolean);
+        const libs = parseLibraryList(this.conn.config.libraryList);
         if (libs.length > 0) {
           console.log(chalk.dim(` Library list: ${libs.join(', ')}`));
         }
@@ -419,8 +417,11 @@ class STRSQLSession {
         if (args.length === 0) {
           const current = this.conn.config?.libraryList;
           if (current) {
-            const libs = Array.isArray(current) ? current : current.split(',').map(l => l.trim());
-            console.log(chalk.dim(`Library list: ${libs.join(', ')}`));
+            const libs = parseLibraryList(current);
+            const curLib = this.conn.config.defaultSchema
+              ? `  current=${this.conn.config.defaultSchema}`
+              : '';
+            console.log(chalk.dim(`Library list: ${libs.join(', ')}${curLib}`));
           } else {
             console.log(chalk.dim('No library list set.'));
           }
@@ -431,10 +432,16 @@ class STRSQLSession {
             this._resetCompletionCache();
             const libs = Array.isArray(this.conn.config.libraryList)
               ? this.conn.config.libraryList
-              : this.conn.config.libraryList.split(',').map(l => l.trim());
-            console.log(chalk.green(`Library list set: ${libs.join(', ')}`));
+              : parseLibraryList(this.conn.config.libraryList);
+            const current = this.conn.config.defaultSchema
+              ? chalk.dim(`  current=${this.conn.config.defaultSchema}`)
+              : '';
+            console.log(chalk.green(`Library list: ${libs.join(', ') || '*NONE'}`) + current);
           } catch (err) {
-            console.error(chalk.red(`Failed to set library list: ${err.message}`));
+            const odbcDetail = err.odbcErrors
+              ? '\n  ' + err.odbcErrors.map(e => `[${e.state}] ${e.message}`).join('\n  ')
+              : '';
+            console.error(chalk.red(`Failed to set library list: ${err.message}${odbcDetail}`));
           }
         }
         break;
@@ -927,7 +934,7 @@ class STRSQLSession {
           let statusLine = chalk.green('● Connected') +
             chalk.dim(`  [${typeLabel}]  host=${hostOrDb}  user=${cfg.username || '?'}  schema=${cfg.defaultSchema || '?'}`);
           if (cfg.libraryList) {
-            const libs = Array.isArray(cfg.libraryList) ? cfg.libraryList : cfg.libraryList.split(',').map(l => l.trim());
+            const libs = parseLibraryList(cfg.libraryList);
             statusLine += chalk.dim(`  libl=${libs.join(',')}`);
           }
           console.log(statusLine);
@@ -992,13 +999,21 @@ class STRSQLSession {
 
   _completionSchemas() {
     const cfg = this.conn?.config || {};
+    const schemas = [];
+    if (cfg.defaultSchema) schemas.push(cfg.defaultSchema);
     if (cfg.libraryList) {
-      const libs = Array.isArray(cfg.libraryList)
-        ? cfg.libraryList
-        : cfg.libraryList.split(',').map(l => l.trim()).filter(Boolean);
-      if (libs.length > 0) return libs;
+      const libs = parseLibraryList(cfg.libraryList);
+      schemas.push(...libs);
     }
-    if (cfg.defaultSchema) return [cfg.defaultSchema];
+    if (schemas.length > 0) {
+      const seen = new Set();
+      return schemas.filter(schema => {
+        const key = String(schema || '').toUpperCase();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
     return this.conn?.dbType === 'sqlite' ? ['main'] : [];
   }
 
@@ -1187,7 +1202,8 @@ ${chalk.bold('Profiles')}
 
 ${chalk.bold('Schema & objects')}
   ${s('\\schema')} [name]                           Show/set default schema
-  ${s('\\libl')} [LIB1,LIB2,...]                    Show/set IBM i library list
+  ${s('\\libl')} LIB1,LIB2,...                      Set IBM i library list
+  ${s('\\libl')}                                    Show current IBM i library list
   ${s('\\tables')} [schema]                         List tables in a schema
   ${s('\\describe')} [schema.]TABLE                 Describe table columns
 

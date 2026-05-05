@@ -270,7 +270,17 @@ Additional options for `\saveprofile`:
 | `\tables [schema]` | List tables (uses native catalog per DB) |
 | `\describe [schema.]TABLE` | Describe table columns |
 
-The `\libl` command calls `CHGLIBL` on the IBM i job via `QSYS2.QCMDEXC`. Without arguments it displays the current library list; with arguments it sets a new one.
+The `\libl` command replaces the user portion of the IBM i job library list via `CHGLIBL` and `QSYS2.QCMDEXC`. Without arguments it displays the configured user library list and current library.
+
+Use comma-separated library names without square brackets:
+
+```sql
+SQL> \libl DIEGOPAL1,DIEGOPAL
+```
+
+Square brackets in command descriptions mean “optional argument”; they are not part of the value to type.
+
+On IBM i, the current library is separate from the user library list. If IBM i rejects a `\libl` command with `CPF2184`, check whether one of the requested libraries is already the current library or whether the user lacks authority to one of the libraries.
 
 ### SQL execution
 
