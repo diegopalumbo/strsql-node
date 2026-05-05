@@ -10,7 +10,7 @@
 
 | Feature | Description |
 |---|---|
-| **Interactive REPL** | Full `STRSQL`-style session with multi-line SQL, `\commands`, inline history navigation, and persistent history |
+| **Interactive REPL** | Full `STRSQL`-style session with multi-line SQL, `\commands`, TAB completion, inline history navigation, and persistent history |
 | **Multi-database support** | IBM i/AS400, SQL Server, PostgreSQL, MySQL/MariaDB, Oracle, DB2 LUW, SQLite — each with native catalog, pagination, and dialect support |
 | **Single-query CLI** | Run any SQL non-interactively and get output as table, CSV, JSON, INSERT, or MERGE/upsert statements |
 | **DB-to-DB Pipe** | Stream rows directly between two database connections (same or different engines) with DDL auto-generation, merge/upsert, column mapping, and no intermediate files |
@@ -34,6 +34,7 @@
   - [Connection](#connection)
   - [Schema & objects](#schema--objects)
   - [SQL execution](#sql-execution)
+  - [TAB completion](#tab-completion)
   - [Export](#export)
   - [Import](#import)
   - [DB2 → DB2 Pipe](#db2--db2-pipe)
@@ -282,6 +283,33 @@ SQL> SELECT ORDNUM, CUSNAM, ORDDAT
   -> ORDER BY ORDDAT DESC
   -> FETCH FIRST 20 ROWS ONLY;
 ```
+
+### TAB completion
+
+Press `TAB` inside the interactive session to complete SQL keywords, `\commands`, table names, and column names. If more than one candidate exists, press `TAB` twice to show the list.
+
+Catalog completion requires an active connection and either a default schema or an IBM i library list:
+
+```sql
+SQL> \schema MYLIB
+SQL> SELECT * FROM ORD<TAB>
+```
+
+or:
+
+```sql
+SQL> \libl MYLIB,ALTROLIB
+SQL> SELECT * FROM ORD<TAB>
+```
+
+Column completion uses the tables already present in the SQL text:
+
+```sql
+SQL> SELECT CUS<TAB> FROM CLIENTI
+SQL> SELECT C.<TAB> FROM CLIENTI C
+```
+
+Table names are suggested after keywords and commands such as `FROM`, `JOIN`, `INTO`, `UPDATE`, `\describe`, `\ddl`, and `\pipe`. Column and table completions are cached during the session and refreshed when reconnecting, disconnecting, changing schema, or changing the IBM i library list.
 
 #### Execute SQL from a file
 
