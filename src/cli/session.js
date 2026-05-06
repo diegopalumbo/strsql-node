@@ -7,7 +7,7 @@ const chalk    = require('chalk');
 const path     = require('path');
 const fs       = require('fs');
 
-const { IBMiConnection }  = require('../lib/connection');
+const { IBMiConnection, parseLibraryList } = require('../lib/connection');
 const { ProfileManager }  = require('../lib/profiles');
 const { HistoryManager }  = require('../lib/history');
 const { formatTable, formatExecResult, exportToFile, toInsert, toMerge } = require('../lib/formatter');
@@ -64,6 +64,7 @@ class STRSQLSession {
     this.buffer = [];       // multi-line SQL buffer
     this.lastResult = null; // for post-query export
     this.rl = null;
+    this.completionCache = this._newCompletionCache();
   }
 
   async _printResult(text, opts = {}) {
@@ -140,14 +141,13 @@ class STRSQLSession {
     try {
       this.conn = new IBMiConnection(config);
       await this.conn.connect();
+      this._resetCompletionCache();
       console.log(chalk.green(' ✓'));
       if (config.defaultSchema) {
         console.log(chalk.dim(` Default schema: ${config.defaultSchema}`));
       }
       if (config.libraryList) {
-        const libs = Array.isArray(config.libraryList)
-          ? config.libraryList
-          : config.libraryList.split(',').map(l => l.trim()).filter(Boolean);
+        const libs = parseLibraryList(this.conn.config.libraryList);
         if (libs.length > 0) {
           console.log(chalk.dim(` Library list: ${libs.join(', ')}`));
         }
@@ -171,7 +171,7 @@ class STRSQLSession {
       prompt: PROMPT_IDLE,
       history: this.history.forReadline(),
       historySize: 500,
-      completer: this._completer.bind(this),
+      completer: (line, cb) => this._completer(line, cb),
     });
 
     this.rl.prompt();
@@ -315,6 +315,7 @@ class STRSQLSession {
           break;
         }
         if (this.conn) await this.conn.disconnect().catch(() => {});
+        this._resetCompletionCache();
         await this._connect(connCfg);
         break;
       }
@@ -323,6 +324,7 @@ class STRSQLSession {
         const [pname] = args;
         if (!pname) { console.error(chalk.red('Usage: \\profile <name>')); break; }
         if (this.conn) await this.conn.disconnect().catch(() => {});
+        this._resetCompletionCache();
         const cfg = this.profiles.resolve(pname);
         await this._connect(cfg);
         break;
@@ -389,6 +391,7 @@ class STRSQLSession {
       case 'disconnect': {
         if (this.conn) {
           await this.conn.disconnect();
+          this._resetCompletionCache();
           console.log(chalk.dim('Disconnected.'));
         }
         break;
@@ -404,6 +407,7 @@ class STRSQLSession {
             : `SET SCHEMA ${schema}`;
           await this._executeSQL(setSchemaSQL);
           if (this.conn) this.conn.config.defaultSchema = schema;
+          this._resetCompletionCache();
         }
         break;
       }
@@ -413,8 +417,11 @@ class STRSQLSession {
         if (args.length === 0) {
           const current = this.conn.config?.libraryList;
           if (current) {
-            const libs = Array.isArray(current) ? current : current.split(',').map(l => l.trim());
-            console.log(chalk.dim(`Library list: ${libs.join(', ')}`));
+            const libs = parseLibraryList(current);
+            const curLib = this.conn.config.defaultSchema
+              ? `  current=${this.conn.config.defaultSchema}`
+              : '';
+            console.log(chalk.dim(`Library list: ${libs.join(', ')}${curLib}`));
           } else {
             console.log(chalk.dim('No library list set.'));
           }
@@ -422,12 +429,19 @@ class STRSQLSession {
           const libStr = args.join(',');
           try {
             await this.conn.setLibraryList(libStr);
+            this._resetCompletionCache();
             const libs = Array.isArray(this.conn.config.libraryList)
               ? this.conn.config.libraryList
-              : this.conn.config.libraryList.split(',').map(l => l.trim());
-            console.log(chalk.green(`Library list set: ${libs.join(', ')}`));
+              : parseLibraryList(this.conn.config.libraryList);
+            const current = this.conn.config.defaultSchema
+              ? chalk.dim(`  current=${this.conn.config.defaultSchema}`)
+              : '';
+            console.log(chalk.green(`Library list: ${libs.join(', ') || '*NONE'}`) + current);
           } catch (err) {
-            console.error(chalk.red(`Failed to set library list: ${err.message}`));
+            const odbcDetail = err.odbcErrors
+              ? '\n  ' + err.odbcErrors.map(e => `[${e.state}] ${e.message}`).join('\n  ')
+              : '';
+            console.error(chalk.red(`Failed to set library list: ${err.message}${odbcDetail}`));
           }
         }
         break;
@@ -920,7 +934,7 @@ class STRSQLSession {
           let statusLine = chalk.green('● Connected') +
             chalk.dim(`  [${typeLabel}]  host=${hostOrDb}  user=${cfg.username || '?'}  schema=${cfg.defaultSchema || '?'}`);
           if (cfg.libraryList) {
-            const libs = Array.isArray(cfg.libraryList) ? cfg.libraryList : cfg.libraryList.split(',').map(l => l.trim());
+            const libs = parseLibraryList(cfg.libraryList);
             statusLine += chalk.dim(`  libl=${libs.join(',')}`);
           }
           console.log(statusLine);
@@ -972,7 +986,158 @@ class STRSQLSession {
 
   // ── completer ─────────────────────────────────────────────────────────────
 
-  _completer(line) {
+  _newCompletionCache() {
+    return {
+      tablesBySchema: new Map(),
+      columnsByTable: new Map(),
+    };
+  }
+
+  _resetCompletionCache() {
+    this.completionCache = this._newCompletionCache();
+  }
+
+  _completionSchemas() {
+    const cfg = this.conn?.config || {};
+    const schemas = [];
+    if (cfg.defaultSchema) schemas.push(cfg.defaultSchema);
+    if (cfg.libraryList) {
+      const libs = parseLibraryList(cfg.libraryList);
+      schemas.push(...libs);
+    }
+    if (schemas.length > 0) {
+      const seen = new Set();
+      return schemas.filter(schema => {
+        const key = String(schema || '').toUpperCase();
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+    return this.conn?.dbType === 'sqlite' ? ['main'] : [];
+  }
+
+  _completionToken(line) {
+    const match = line.match(/(?:^|[\s(),=<>+\-*/])([\\A-Za-z0-9_.$"]*)$/);
+    return match ? match[1] : '';
+  }
+
+  _stripIdentifier(id) {
+    return String(id || '').replace(/^["'`\[]|["'`\]]$/g, '');
+  }
+
+  _completionFilter(values, token) {
+    const needle = token.toUpperCase();
+    const seen = new Set();
+    return values
+      .filter(Boolean)
+      .filter(v => String(v).toUpperCase().startsWith(needle))
+      .filter(v => {
+        const key = String(v).toUpperCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .sort((a, b) => String(a).localeCompare(String(b)));
+  }
+
+  async _tableCompletions() {
+    if (!this.conn?.isConnected()) return [];
+
+    const schemas = this._completionSchemas();
+    const candidates = [];
+
+    for (const schema of schemas) {
+      const schemaKey = String(schema || '').toUpperCase();
+      if (!this.completionCache.tablesBySchema.has(schemaKey)) {
+        const result = await this.conn.listTables(schema);
+        const tables = result.rows.map(r => ({
+          schema: r.TABLE_SCHEMA || schema,
+          name: r.TABLE_NAME,
+        })).filter(t => t.name);
+        this.completionCache.tablesBySchema.set(schemaKey, tables);
+      }
+
+      for (const table of this.completionCache.tablesBySchema.get(schemaKey)) {
+        candidates.push(table.name);
+        if (table.schema) candidates.push(`${table.schema}.${table.name}`);
+      }
+    }
+
+    return candidates;
+  }
+
+  _tablesInSQL(line) {
+    const sql = line.replace(/;+\s*$/, '');
+    const tables = [];
+    const aliasByName = new Map();
+    const re = /\b(?:FROM|JOIN|UPDATE|INTO)\s+([A-Za-z0-9_.$"]+)(?:\s+(?:AS\s+)?([A-Za-z0-9_]+))?/gi;
+    const stop = new Set(['WHERE', 'JOIN', 'LEFT', 'RIGHT', 'FULL', 'INNER', 'OUTER', 'ON',
+      'SET', 'VALUES', 'GROUP', 'ORDER', 'HAVING', 'LIMIT', 'FETCH']);
+
+    let match;
+    while ((match = re.exec(sql)) !== null) {
+      const rawTable = this._stripIdentifier(match[1]);
+      const alias = match[2] && !stop.has(match[2].toUpperCase()) ? match[2] : null;
+      if (!rawTable) continue;
+      tables.push({ table: rawTable, alias });
+      aliasByName.set(rawTable.toUpperCase(), rawTable);
+      if (alias) aliasByName.set(alias.toUpperCase(), rawTable);
+    }
+
+    return { tables, aliasByName };
+  }
+
+  async _columnsForTable(tableRef) {
+    if (!this.conn?.isConnected()) return [];
+    const clean = this._stripIdentifier(tableRef);
+    const [schema, table] = clean.includes('.')
+      ? clean.split('.')
+      : [this.conn.config.defaultSchema, clean];
+    const key = `${schema || ''}.${table}`.toUpperCase();
+
+    if (!this.completionCache.columnsByTable.has(key)) {
+      const result = await this.conn.describeTable(table, schema);
+      const columns = result.rows.map(r => r.COLUMN_NAME).filter(Boolean);
+      this.completionCache.columnsByTable.set(key, columns);
+    }
+
+    return this.completionCache.columnsByTable.get(key);
+  }
+
+  async _columnCompletions(line, token) {
+    const { tables, aliasByName } = this._tablesInSQL(line);
+    if (tables.length === 0) return [];
+
+    const dot = token.lastIndexOf('.');
+    if (dot >= 0) {
+      const qualifier = token.slice(0, dot);
+      const columnPrefix = token.slice(dot + 1);
+      const table = aliasByName.get(qualifier.toUpperCase());
+      if (!table) return [];
+      const columns = await this._columnsForTable(table);
+      return this._completionFilter(columns, columnPrefix).map(c => `${qualifier}.${c}`);
+    }
+
+    const candidates = [];
+    for (const entry of tables) {
+      const columns = await this._columnsForTable(entry.table);
+      candidates.push(...columns);
+    }
+    return this._completionFilter(candidates, token);
+  }
+
+  _wantsTableCompletion(line, token) {
+    const beforeToken = line.slice(0, line.length - token.length);
+    const parts = beforeToken.trim().split(/\s+/);
+    const prev = (parts[parts.length - 1] || '').toUpperCase();
+    const tableWords = new Set(['FROM', 'JOIN', 'INTO', 'UPDATE', 'TABLE', 'DESCRIBE', 'DESC']);
+    return tableWords.has(prev) ||
+      /^\\(?:describe|desc|ddl|pipe)\s+/i.test(line) ||
+      /--(?:target-table|source-table|table)\s+$/i.test(beforeToken);
+  }
+
+  async _completionHits(line, token = this._completionToken(line)) {
     const SQL_KEYWORDS = [
       'SELECT', 'FROM', 'WHERE', 'INSERT', 'INTO', 'VALUES',
       'UPDATE', 'SET', 'DELETE', 'JOIN', 'LEFT', 'INNER', 'OUTER',
@@ -991,10 +1156,31 @@ class STRSQLSession {
       '\\pager', '\\nopager', '\\pagerstatus',
     ];
 
-    const all = [...SQL_KEYWORDS, ...META_CMDS];
-    const upper = line.toUpperCase();
-    const hits = all.filter(k => k.startsWith(upper));
-    return [hits.length ? hits : all, line];
+    if (line.trimStart().startsWith('\\') && !line.trimStart().includes(' ')) {
+      return this._completionFilter(META_CMDS, token);
+    }
+
+    if (this._wantsTableCompletion(line, token)) {
+      return this._completionFilter(await this._tableCompletions(), token);
+    }
+
+    const columns = await this._columnCompletions(line, token);
+    if (columns.length > 0) return columns;
+
+    return this._completionFilter([...SQL_KEYWORDS, ...META_CMDS], token);
+  }
+
+  async _completer(line, cb) {
+    const token = this._completionToken(line);
+    const contextLine = this.buffer.length > 0
+      ? `${this.buffer.join(' ')} ${line}`
+      : line;
+    try {
+      const hits = await this._completionHits(contextLine, token);
+      cb(null, [hits, token]);
+    } catch {
+      cb(null, [[], token]);
+    }
   }
 
   // ── help ──────────────────────────────────────────────────────────────────
@@ -1016,7 +1202,8 @@ ${chalk.bold('Profiles')}
 
 ${chalk.bold('Schema & objects')}
   ${s('\\schema')} [name]                           Show/set default schema
-  ${s('\\libl')} [LIB1,LIB2,...]                    Show/set IBM i library list
+  ${s('\\libl')} LIB1,LIB2,...                      Set IBM i library list
+  ${s('\\libl')}                                    Show current IBM i library list
   ${s('\\tables')} [schema]                         List tables in a schema
   ${s('\\describe')} [schema.]TABLE                 Describe table columns
 

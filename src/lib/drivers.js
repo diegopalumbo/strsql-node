@@ -41,7 +41,9 @@ const DRIVERS = {
     },
     setSchema: `SET SCHEMA ?`,
     setLibraryList(libs) {
-      const libStr = libs.map(l => l.trim().toUpperCase()).join(' ');
+      const libStr = libs.length > 0
+        ? libs.map(l => l.trim().toUpperCase()).join(' ')
+        : '*NONE';
       return `CALL QSYS2.QCMDEXC('CHGLIBL LIBL(${libStr})')`;
     },
     listTablesSql(schema) {
