@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.13] - 2026-05-08
+
+### Fixed
+- **idb-connector — system naming mode**: `SQL_ATTR_DBC_SYS_NAMING` (`10004`) is now set to `SQL_TRUE` before connecting; unqualified table references (e.g. `SELECT * FROM PRODUCTSP`) are now resolved via the job's library list, the same behaviour as ODBC with `NAM=1`. Previously they were resolved only against the current schema, returning 0 rows when the table lived in a library list entry other than the current library.
+
+---
+
 ## [1.0.12] - 2026-05-08
 
 ### Added
