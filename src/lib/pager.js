@@ -167,6 +167,11 @@ function prefersAsciiOutput() {
   if (process.env.STRSQL_ASCII === '1') return true;
   if (process.env.STRSQL_ASCII === '0') return false;
 
+  // IBM i PASE: less on PASE does not interpret UTF-8 multi-byte sequences
+  // by default, rendering box-drawing characters as raw hex bytes.
+  // Use ASCII borders unless the user explicitly opts out with STRSQL_ASCII=0.
+  if (os.platform() === 'aix') return true;
+
   if (os.platform() !== 'win32') return false;
 
   const pager = detectPager();
@@ -309,7 +314,11 @@ async function printWithPager(text, opts = {}) {
     let child;
     try {
       fs.writeFileSync(tmpFile, text + '\n', 'utf8');
-      child = spawn(spec.command, [...args, tmpFile], { stdio: 'inherit' });
+      // Pass LESSCHARSET=utf-8 so that less correctly handles multi-byte
+      // UTF-8 sequences (box-drawing characters) on systems where the
+      // locale is not configured for UTF-8 (e.g. IBM i PASE).
+      const childEnv = { ...process.env, LESSCHARSET: process.env.LESSCHARSET || 'utf-8' };
+      child = spawn(spec.command, [...args, tmpFile], { stdio: 'inherit', env: childEnv });
     } catch {
       process.stdout.write(text + '\n');
       try { fs.unlinkSync(tmpFile); } catch {}
