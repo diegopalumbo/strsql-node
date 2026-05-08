@@ -74,6 +74,16 @@ class Db2iIdbConnection {
   async connect() {
     this.db = loadConnector();
     this.conn = new this.db.dbconn();
+
+    // Enable IBM i system naming mode (SQL_ATTR_DBC_SYS_NAMING = 10004).
+    // In system naming mode, unqualified table references are resolved via
+    // the job's library list (like NAM=1 in ODBC), instead of the current
+    // schema only. Must be called BEFORE conn().
+    // Note: in system naming mode, qualified references use SCHEMA/TABLE
+    // (slash) instead of SCHEMA.TABLE (period). Standard SQL dot-notation
+    // still works for SQL statements; only the CLI metadata APIs change.
+    this.conn.setConnAttr(10004, 1); // SQL_ATTR_DBC_SYS_NAMING = SQL_TRUE
+
     this.conn.conn(this.buildConnectionString());
     this.connected = true;
 
@@ -237,8 +247,19 @@ class Db2iIdbConnection {
     if (arr.length === 0) throw new Error('Empty library list.');
     await this.execute(this.driver.setLibraryList(arr));
     const info = await this._libraryListInfo();
-    if (info.current && !this.config.defaultSchema) this.config.defaultSchema = info.current;
+    const currentLib = info.current || arr[0];
+    if (currentLib && !this.config.defaultSchema) this.config.defaultSchema = currentLib;
     this.config.libraryList = info.user.length > 0 ? info.user : arr;
+
+    // idb-connector uses SQL naming mode by default: unqualified table names
+    // resolve to the current schema, NOT through the library list (unlike
+    // ODBC with NAM=1). After CHGLIBL, set the schema to the current library
+    // so that queries like SELECT * FROM MYTABLE find objects without explicit
+    // schema qualification.
+    const schema = this.config.defaultSchema || currentLib;
+    if (schema) {
+      try { await this.execute(`SET SCHEMA ${systemName(schema)}`); } catch { /* non-fatal */ }
+    }
   }
 
   quoteIdentifier(name) {
