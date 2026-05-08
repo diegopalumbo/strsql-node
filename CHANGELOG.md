@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.14] - 2026-05-08
+
+### Fixed
+- **Pager — garbled output on IBM i PASE**: `less` on IBM i PASE does not interpret multi-byte UTF-8 sequences by default, causing box-drawing characters (╔, ║, ╠, …) to appear as raw byte sequences (`<E2><94><8C>`, …). Tables now automatically use ASCII borders (`+`, `-`, `|`) when running on PASE (`process.platform === 'aix'`). This can be overridden with `STRSQL_ASCII=0` if your terminal and `less` are configured for UTF-8.
+- **Pager — `LESSCHARSET=utf-8`**: `less` is now spawned with `LESSCHARSET=utf-8` in its environment (unless already set) so that UTF-8 multi-byte characters are handled correctly on systems that support it.
+
+---
+
 ## [1.0.13] - 2026-05-08
 
 ### Fixed
