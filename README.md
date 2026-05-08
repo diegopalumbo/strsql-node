@@ -10,7 +10,7 @@
 
 | Feature | Description |
 |---|---|
-| **Interactive REPL** | Full `STRSQL`-style session with multi-line SQL, `\commands`, TAB completion, inline history navigation, and persistent history |
+| **Interactive REPL** | Full `STRSQL`-style session with multi-line SQL, `\commands`, TAB completion, inline history navigation, persistent history, shell passthrough, and built-in SQL editor |
 | **Multi-database support** | IBM i/AS400, SQL Server, PostgreSQL, MySQL/MariaDB, Oracle, DB2 LUW, SQLite — each with native catalog, pagination, and dialect support |
 | **Single-query CLI** | Run any SQL non-interactively and get output as table, CSV, JSON, INSERT, or MERGE/upsert statements |
 | **DB-to-DB Pipe** | Stream rows directly between two database connections (same or different engines) with DDL auto-generation, merge/upsert, column mapping, and no intermediate files |
@@ -40,6 +40,8 @@
   - [DB2 → DB2 Pipe](#db2--db2-pipe)
   - [DDL generation](#ddl-generation)
   - [History](#history)
+  - [Shell commands](#shell-commands)
+  - [SQL editor](#sql-editor)
 - [CLI subcommands](#cli-subcommands)
 - [Programmatic API](#programmatic-api)
   - [ODBCConnection](#odbcconnection)
@@ -416,6 +418,58 @@ Options:
 | `↑ ↓` arrow keys | Navigate history inline |
 
 History is persisted to `~/.strsql-node/history.json`.
+
+### Shell commands
+
+Pass any command to the system shell without leaving the session using `\cmd`:
+
+```
+SQL> \cmd ls -la /tmp
+SQL> \cmd cat /data/query.sql
+SQL> \cmd echo $PWD
+```
+
+**Changing the working directory** — `cd` is a shell built-in and cannot be delegated to a child process, so strsql handles it natively:
+
+```
+SQL> \cmd cd /Users/diego/queries
+cwd: /Users/diego/queries
+SQL> \cmd cd ~
+cwd: /Users/diego
+SQL> \cmd cd ..    (relative paths work too)
+```
+
+Changing the working directory affects all relative paths used in the same session (`\run`, `\import`, `\export`, `\edit`).
+
+Note: `\cmd` runs synchronously and inherits the terminal's stdin/stdout/stderr, so interactive programs (editors, pagers, etc.) work normally.
+
+### SQL editor
+
+Open SQL in your preferred editor with `\edit` (alias `\e`). When you save and close the editor, the SQL is executed automatically.
+
+```
+SQL> \edit              -- opens last executed query in $EDITOR
+SQL> \e                 -- same, short form
+SQL> \edit query.sql    -- open (or create) a specific file and execute on close
+```
+
+The temporary buffer is seeded with the content of the current multi-line buffer (if any) or the last executed statement from history.
+
+The editor is chosen from the environment in this order: `$VISUAL`, `$EDITOR`, `vi`. Set either variable to point to your preferred editor:
+
+```bash
+# Terminal editors
+export EDITOR=nano
+export EDITOR=vim
+
+# GUI editors (must support a "wait" flag so strsql knows when you're done)
+export VISUAL="code --wait"         # VS Code
+export VISUAL="subl --wait"         # Sublime Text
+export VISUAL="idea --wait"         # IntelliJ IDEA
+export VISUAL="cursor --wait"       # Cursor
+```
+
+> **Tip:** add the export to your shell profile (`~/.zshrc`, `~/.bashrc`) to make it permanent.
 
 ---
 

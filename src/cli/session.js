@@ -2,10 +2,12 @@
 
 require('dotenv').config();
 
-const readline = require('readline');
-const chalk    = require('chalk');
-const path     = require('path');
-const fs       = require('fs');
+const readline     = require('readline');
+const chalk        = require('chalk');
+const path         = require('path');
+const fs           = require('fs');
+const os           = require('os');
+const { spawnSync } = require('child_process');
 
 const { IBMiConnection, parseLibraryList } = require('../lib/connection');
 const { ProfileManager }  = require('../lib/profiles');
@@ -979,6 +981,101 @@ class STRSQLSession {
         break;
       }
 
+      // ── \! <command>  — run a shell command ──────────────────────────────
+      case 'cmd': {
+        // Reconstruct the raw command string preserving spaces
+        const shellCmd = cmd.slice(verb.length).trimStart();
+        if (!shellCmd) {
+          console.error(chalk.red('Usage: \\cmd <command>   (e.g. \\cmd ls -la  or  \\cmd cd /tmp)'));
+          break;
+        }
+
+        // cd is a shell built-in that must be handled in-process
+        const cdMatch = shellCmd.match(/^cd(?:\s+(.*))?$/);
+        if (cdMatch) {
+          const raw = (cdMatch[1] || '').trim() || os.homedir();
+          const target = raw.replace(/^~(?=$|\/|\\)/, os.homedir());
+          try {
+            process.chdir(target);
+            console.log(chalk.dim(`cwd: ${process.cwd()}`));
+          } catch (err) {
+            console.error(chalk.red(`cd: ${err.message}`));
+          }
+          break;
+        }
+
+        this.rl.pause();
+        try {
+          const result = spawnSync(shellCmd, { shell: true, stdio: 'inherit' });
+          if (result.error) {
+            console.error(chalk.red(`Shell error: ${result.error.message}`));
+          } else if (result.status !== 0 && result.status !== null) {
+            console.log(chalk.dim(`  exit code: ${result.status}`));
+          }
+        } finally {
+          this.rl.resume();
+        }
+        break;
+      }
+
+      // ── \edit / \e  — open SQL buffer in $EDITOR ─────────────────────────
+      case 'edit':
+      case 'e': {
+        const editor = process.env.VISUAL || process.env.EDITOR || 'vi';
+
+        // Determine file to edit
+        let editFile;
+        let isTmp = false;
+
+        if (args[0]) {
+          editFile = path.resolve(args[0]);
+        } else {
+          editFile = path.join(os.tmpdir(), `strsql_edit_${Date.now()}.sql`);
+          isTmp = true;
+          // Seed with current buffer or last executed SQL
+          const seed = this.buffer.length > 0
+            ? this.buffer.join('\n')
+            : (this.history.all().slice(-1)[0] || '');
+          fs.writeFileSync(editFile, seed, 'utf8');
+        }
+
+        this.rl.pause();
+        let editContent = '';
+        try {
+          // Split editor command to support things like "code --wait"
+          const [editorBin, ...editorArgs] = editor.split(/\s+/);
+          const result = spawnSync(editorBin, [...editorArgs, editFile], { stdio: 'inherit' });
+          if (result.error) {
+            console.error(chalk.red(`Editor error: ${result.error.message}`));
+            break;
+          }
+
+          if (fs.existsSync(editFile)) {
+            editContent = fs.readFileSync(editFile, 'utf8');
+            if (isTmp) {
+              try { fs.unlinkSync(editFile); } catch {}
+            }
+          }
+        } finally {
+          this.rl.resume();
+        }
+
+        const sql = editContent.trim();
+        if (!sql) {
+          this.buffer = [];
+          console.log(chalk.dim('  (empty — nothing to execute)'));
+          break;
+        }
+
+        // Strip trailing semicolon and execute
+        const toExec = sql.replace(/;+\s*$/, '').trim();
+        if (toExec) {
+          this.buffer = [];
+          await this._executeSQL(toExec);
+        }
+        break;
+      }
+
       default:
         console.error(chalk.red(`Unknown command: \\${verb}. Type \\help for help.`));
     }
@@ -1153,7 +1250,7 @@ class STRSQLSession {
       '\\schema', '\\libl', '\\tables', '\\describe',
       '\\export', '\\import', '\\pipe', '\\ddl', '\\run',
       '\\drivers', '\\history', '\\hsearch', '\\status', '\\clear',
-      '\\pager', '\\nopager', '\\pagerstatus',
+      '\\pager', '\\nopager', '\\pagerstatus', '\\cmd',
     ];
 
     if (line.trimStart().startsWith('\\') && !line.trimStart().includes(' ')) {
@@ -1241,6 +1338,15 @@ ${chalk.bold('Pager')}
   ${s('\\pager')}                                   Re-enable pager
   ${s('\\pagerstatus')}                             Show pager diagnostics
   ${d('Set STRSQL_NO_PAGER=1 to disable permanently')}
+
+${chalk.bold('Shell')}
+  ${s('\\cmd')} <command>                          Run a shell command (e.g. \\cmd ls -la)
+  ${s('\\cmd')} cd <dir>                           Change working directory (affects relative paths)
+
+${chalk.bold('SQL Editor')}
+  ${s('\\edit')} ${d('[file.sql]')}                       Open SQL in \\$EDITOR; executes on save & close
+  ${s('\\e')} ${d('[file.sql]')}                          Alias for \\edit
+  ${d('Set $VISUAL or $EDITOR to choose your editor (e.g. EDITOR=nano or VISUAL=code --wait)')}
 
 ${chalk.bold('Other')}
   ${s('\\drivers')}                                 List supported DB types
