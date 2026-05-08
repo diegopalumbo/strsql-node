@@ -1,6 +1,6 @@
 'use strict';
 
-const { ODBCConnection, IBMiConnection } = require('./connection');
+const { ODBCConnection, IBMiConnection, Db2iIdbConnection, createConnection } = require('./connection');
 const { ProfileManager }  = require('./profiles');
 const { HistoryManager }  = require('./history');
 const { formatTable, formatExecResult, toCSV, toJSON, toInsert, toMerge, exportToFile } = require('./formatter');
@@ -12,6 +12,8 @@ const { Dialect }                            = require('./dialect');
 module.exports = {
   ODBCConnection,
   IBMiConnection,   // backward-compat alias
+  Db2iIdbConnection,
+  createConnection,
   ProfileManager,
   HistoryManager,
   formatTable,

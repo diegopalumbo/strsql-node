@@ -1,7 +1,24 @@
 'use strict';
 
-const odbc      = require('odbc');
 const { getDriver } = require('./drivers');
+const { Db2iIdbConnection } = require('./idbConnection');
+
+function wantsIdbAdapter(config = {}) {
+  const adapter = String(config.adapter || config.driver || '').toLowerCase();
+  return (config.type || 'ibmi').toLowerCase() === 'ibmi' &&
+    ['idb', 'idb-connector', 'native'].includes(adapter);
+}
+
+function loadOdbc() {
+  try {
+    return require('odbc');
+  } catch (err) {
+    err.message =
+      'Cannot load odbc. Install the odbc package and required ODBC driver, ' +
+      'or use IBM i native adapter=idb on IBM i/PASE. Original error: ' + err.message;
+    throw err;
+  }
+}
 
 function parseLibraryList(libs) {
   if (!libs) return [];
@@ -43,6 +60,9 @@ function parseLibraryList(libs) {
  */
 class ODBCConnection {
   constructor(config) {
+    if (wantsIdbAdapter(config)) {
+      return new Db2iIdbConnection(config);
+    }
     this.config    = config;
     this.type      = (config.type || 'ibmi').toLowerCase();
     this.driver    = getDriver(this.type);
@@ -56,6 +76,7 @@ class ODBCConnection {
 
   async connect() {
     const connStr = this.buildConnectionString();
+    const odbc = loadOdbc();
     this.conn      = await odbc.connect(connStr);
     this.connected = true;
 
@@ -236,6 +257,7 @@ class ODBCConnection {
       await this.conn.close();
       this.connected = false;
       const connStr = this.buildConnectionString();
+      const odbc = loadOdbc();
       this.conn      = await odbc.connect(connStr);
       this.connected = true;
     }
@@ -257,6 +279,16 @@ class ODBCConnection {
 }
 
 // backward-compat alias — new IBMiConnection(config) still works unchanged
-const IBMiConnection = ODBCConnection;
+function IBMiConnection(config) {
+  return wantsIdbAdapter(config)
+    ? new Db2iIdbConnection(config)
+    : new ODBCConnection(config);
+}
 
-module.exports = { ODBCConnection, IBMiConnection, parseLibraryList };
+function createConnection(config) {
+  return wantsIdbAdapter(config)
+    ? new Db2iIdbConnection(config)
+    : new ODBCConnection(config);
+}
+
+module.exports = { ODBCConnection, IBMiConnection, Db2iIdbConnection, createConnection, parseLibraryList };

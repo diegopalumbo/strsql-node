@@ -40,6 +40,7 @@ class ProfileManager {
     return Object.keys(profiles).map(name => ({
       name,
       type:          profiles[name].type || 'ibmi',
+      adapter:       profiles[name].adapter || 'odbc',
       host:          profiles[name].host || profiles[name].database || '',
       username:      profiles[name].username,
       defaultSchema: profiles[name].defaultSchema || '',
@@ -79,6 +80,7 @@ class ProfileManager {
     const base = name ? this.get(name) : {};
     return {
       type:          base.type || 'ibmi',
+      adapter:       process.env.STRSQL_ADAPTER      || base.adapter || base.driver || 'odbc',
       host:          process.env.STRSQL_HOST         || base.host,
       username:      process.env.STRSQL_USER         || base.username,
       password:      process.env.STRSQL_PASSWORD     || base.password,
@@ -88,6 +90,7 @@ class ProfileManager {
       ...base,
       // ENV always wins
       ...(process.env.STRSQL_HOST         && { host:          process.env.STRSQL_HOST }),
+      ...(process.env.STRSQL_ADAPTER      && { adapter:       process.env.STRSQL_ADAPTER }),
       ...(process.env.STRSQL_USER         && { username:      process.env.STRSQL_USER }),
       ...(process.env.STRSQL_PASSWORD     && { password:      process.env.STRSQL_PASSWORD }),
       ...(process.env.STRSQL_SCHEMA       && { defaultSchema: process.env.STRSQL_SCHEMA }),

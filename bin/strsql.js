@@ -12,6 +12,74 @@ const pkg = require('../package.json');
 
 const program = new Command();
 
+function applyConnectionEnv(opts) {
+  if (opts.host)        process.env.STRSQL_HOST         = opts.host;
+  if (opts.user)        process.env.STRSQL_USER         = opts.user;
+  if (opts.password)    process.env.STRSQL_PASSWORD     = opts.password;
+  if (opts.schema)      process.env.STRSQL_SCHEMA       = opts.schema;
+  if (opts.libraryList) process.env.STRSQL_LIBRARY_LIST = opts.libraryList;
+  if (opts.adapter)     process.env.STRSQL_ADAPTER      = opts.adapter;
+}
+
+async function runSingleStatement(statement, opts) {
+  applyConnectionEnv(opts);
+
+  const { IBMiConnection } = require('../src/lib/connection');
+  const { ProfileManager } = require('../src/lib/profiles');
+  const { formatTable, formatExecResult, toCSV, toJSON, toInsert, toMerge, exportToFile } = require('../src/lib/formatter');
+
+  const profiles = new ProfileManager();
+  const config = profiles.resolve(opts.profile);
+
+  if (!config.host) {
+    console.error(chalk.red('No host specified. Use --host or set STRSQL_HOST.'));
+    process.exit(1);
+  }
+
+  const sqlOpts = {
+    table: opts.table,
+    keys: opts.keys ? opts.keys.split(',').map(k => k.trim()) : [],
+    batch: parseInt(opts.batch, 10) || 1,
+  };
+
+  const conn = new IBMiConnection(config);
+  try {
+    await conn.connect();
+    const upper = statement.trim().toUpperCase();
+    const isSelect = upper.startsWith('SELECT') || upper.startsWith('WITH') || upper.startsWith('VALUES');
+
+    if (isSelect) {
+      const result = await conn.query(statement);
+      if (opts.out) {
+        exportToFile(result, opts.out, sqlOpts);
+        console.log(chalk.green(`Exported → ${opts.out}`));
+      } else if (opts.format === 'json') {
+        console.log(toJSON(result));
+      } else if (opts.format === 'csv') {
+        process.stdout.write(toCSV(result) + '\n');
+      } else if (opts.format === 'insert') {
+        process.stdout.write(toInsert(result, sqlOpts) + '\n');
+      } else if (opts.format === 'merge') {
+        if (!sqlOpts.keys || sqlOpts.keys.length === 0) {
+          console.error(chalk.red('--keys is required for merge format.'));
+          process.exit(1);
+        }
+        process.stdout.write(toMerge(result, sqlOpts) + '\n');
+      } else {
+        console.log(formatTable(result));
+      }
+    } else {
+      const result = await conn.execute(statement);
+      console.log(formatExecResult(result));
+    }
+  } catch (err) {
+    console.error(chalk.red(`Error: ${err.message}`));
+    process.exit(1);
+  } finally {
+    await conn.disconnect().catch(() => {});
+  }
+}
+
 program
   .name('strsql')
   .description('IBM i STRSQL emulator via ODBC')
@@ -27,14 +95,22 @@ program
   .option('--password <password>', 'Password (prefer STRSQL_PASSWORD env var)')
   .option('-s, --schema <schema>', 'Default schema/library')
   .option('-l, --library-list <libs>', 'IBM i library list (comma-separated)')
+  .option('--adapter <adapter>',    'Connection adapter: odbc|idb (IBM i only)')
+  .option('-q, --query <sql>',      'Execute a single SQL statement and exit')
+  .option('-f, --format <fmt>',     'Output format for -q: table|csv|json|insert|merge', 'table')
+  .option('-o, --out <file>',       'Export result for -q (.csv/.json/.sql/.insert.sql/.merge.sql)')
+  .option('--table <table>',        'Target table for SQL export with -q')
+  .option('--keys <keys>',          'Key columns for MERGE with -q, comma-separated')
+  .option('--batch <n>',            'Rows per INSERT statement with -q (default 1)', '1')
   .option('--max-cell-width <n>',  'Max column width in table output (default: auto)')
   .action(async (opts) => {
+    if (opts.query && opts.query.trim()) {
+      await runSingleStatement(opts.query, opts);
+      return;
+    }
+
     // CLI flags override ENV and profile
-    if (opts.host)        process.env.STRSQL_HOST         = opts.host;
-    if (opts.user)        process.env.STRSQL_USER         = opts.user;
-    if (opts.password)    process.env.STRSQL_PASSWORD     = opts.password;
-    if (opts.schema)      process.env.STRSQL_SCHEMA       = opts.schema;
-    if (opts.libraryList) process.env.STRSQL_LIBRARY_LIST = opts.libraryList;
+    applyConnectionEnv(opts);
 
     const session = new STRSQLSession({
       profile:      opts.profile,
@@ -44,82 +120,30 @@ program
     await session.start(opts.profile);
   });
 
-// ─── strsql run <sql>  (non-interactive single query) ────────────────────────
+// ─── strsql run [sql]  (non-interactive single query) ────────────────────────
 program
-  .command('run <sql>')
+  .command('run [sql]')
   .description('Execute a single SQL statement and exit')
+  .option('-q, --query <sql>',      'SQL query/statement to execute')
   .option('-p, --profile <name>',   'Named connection profile')
   .option('-H, --host <host>',      'IBM i hostname')
   .option('-u, --user <user>',      'Username')
   .option('--password <password>',  'Password')
   .option('-s, --schema <schema>',  'Default schema')
   .option('-l, --library-list <libs>', 'IBM i library list (comma-separated)')
+  .option('--adapter <adapter>',    'Connection adapter: odbc|idb (IBM i only)')
   .option('-f, --format <fmt>',     'Output format: table|csv|json|insert|merge', 'table')
   .option('-o, --out <file>',       'Export result to file (.csv/.json/.sql/.insert.sql/.merge.sql)')
   .option('--table <table>',        'Target table name for SQL export (e.g. MYLIB.ORDERS)')
   .option('--keys <keys>',          'Key columns for MERGE, comma-separated (e.g. ORDNUM,CUSNUM)')
   .option('--batch <n>',            'Rows per INSERT statement (default 1)', '1')
   .action(async (sql, opts) => {
-    if (opts.host)        process.env.STRSQL_HOST         = opts.host;
-    if (opts.user)        process.env.STRSQL_USER         = opts.user;
-    if (opts.password)    process.env.STRSQL_PASSWORD     = opts.password;
-    if (opts.schema)      process.env.STRSQL_SCHEMA       = opts.schema;
-    if (opts.libraryList) process.env.STRSQL_LIBRARY_LIST = opts.libraryList;
-
-    const { IBMiConnection }  = require('../src/lib/connection');
-    const { ProfileManager }  = require('../src/lib/profiles');
-    const { formatTable, formatExecResult, toCSV, toJSON, toInsert, toMerge, exportToFile } = require('../src/lib/formatter');
-
-    const profiles = new ProfileManager();
-    const config = profiles.resolve(opts.profile);
-
-    if (!config.host) {
-      console.error(chalk.red('No host specified. Use --host or set STRSQL_HOST.'));
+    const statement = opts.query || sql;
+    if (!statement || !statement.trim()) {
+      console.error(chalk.red('No SQL specified. Use: strsql run -q "SELECT ..."'));
       process.exit(1);
     }
-
-    const sqlOpts = {
-      table: opts.table,
-      keys:  opts.keys ? opts.keys.split(',').map(k => k.trim()) : [],
-      batch: parseInt(opts.batch, 10) || 1,
-    };
-
-    const conn = new IBMiConnection(config);
-    try {
-      await conn.connect();
-      const upper = sql.trim().toUpperCase();
-      const isSelect = upper.startsWith('SELECT') || upper.startsWith('WITH') || upper.startsWith('VALUES');
-
-      if (isSelect) {
-        const result = await conn.query(sql);
-        if (opts.out) {
-          exportToFile(result, opts.out, sqlOpts);
-          console.log(chalk.green(`Exported → ${opts.out}`));
-        } else if (opts.format === 'json') {
-          console.log(toJSON(result));
-        } else if (opts.format === 'csv') {
-          process.stdout.write(toCSV(result) + '\n');
-        } else if (opts.format === 'insert') {
-          process.stdout.write(toInsert(result, sqlOpts) + '\n');
-        } else if (opts.format === 'merge') {
-          if (!sqlOpts.keys || sqlOpts.keys.length === 0) {
-            console.error(chalk.red('--keys is required for merge format.'));
-            process.exit(1);
-          }
-          process.stdout.write(toMerge(result, sqlOpts) + '\n');
-        } else {
-          console.log(formatTable(result));
-        }
-      } else {
-        const result = await conn.execute(sql);
-        console.log(formatExecResult(result));
-      }
-    } catch (err) {
-      console.error(chalk.red(`Error: ${err.message}`));
-      process.exit(1);
-    } finally {
-      await conn.disconnect().catch(() => {});
-    }
+    await runSingleStatement(statement, opts);
   });
 
 // ─── strsql import <file>  (non-interactive import) ──────────────────────────
@@ -132,6 +156,7 @@ program
   .option('--password <password>',   'Password')
   .option('-s, --schema <schema>',   'Default schema')
   .option('-l, --library-list <libs>', 'IBM i library list (comma-separated)')
+  .option('--adapter <adapter>',     'Connection adapter: odbc|idb (IBM i only)')
   .option('-t, --table <table>',     'Target table e.g. MYLIB.ORDERS  (required for CSV/JSON)')
   .option('-m, --mode <mode>',       'Error mode: abort|skip  (default: abort)', 'abort')
   .option('-b, --batch <n>',         'Rows per commit (default: 100)', '100')
@@ -144,7 +169,7 @@ program
     if (opts.password)    process.env.STRSQL_PASSWORD     = opts.password;
     if (opts.schema)      process.env.STRSQL_SCHEMA       = opts.schema;
     if (opts.libraryList) process.env.STRSQL_LIBRARY_LIST = opts.libraryList;
-
+    if (opts.adapter)     process.env.STRSQL_ADAPTER      = opts.adapter;
     const { IBMiConnection } = require('../src/lib/connection');
     const { ProfileManager } = require('../src/lib/profiles');
     const { Importer, ERROR_MODE } = require('../src/lib/importer');
@@ -214,6 +239,7 @@ program
   .option('--password <password>',         'Source password')
   .option('-s, --schema <schema>',         'Source default schema')
   .option('-l, --library-list <libs>',     'Source IBM i library list (comma-separated)')
+  .option('--adapter <adapter>',           'Source adapter: odbc|idb (IBM i only)')
   .option('--source-table <table>',        'Source table  e.g. SRCLIB.ORDERS')
   .option('--sql <select>',                'Override: full SELECT on source')
   .option('--where <condition>',           'WHERE clause appended to source SELECT')
@@ -224,6 +250,7 @@ program
   .option('--target-password <password>',  'Target password')
   .option('--target-schema <schema>',      'Target default schema')
   .option('--target-library-list <libs>',  'Target IBM i library list (comma-separated)')
+  .option('--target-adapter <adapter>',    'Target adapter: odbc|idb (IBM i only)')
   .option('--target-table <table>',        'Target table (default: same as source)')
   // ── transfer ──
   .option('--mode <mode>',                 'Transfer mode: insert|merge  (default: insert)', 'insert')
@@ -251,6 +278,7 @@ program
 
     const profiles   = new ProfileManager();
     const srcConfig  = profiles.resolve(opts.profile);
+    if (opts.adapter) srcConfig.adapter = opts.adapter;
 
     // Validate source
     if (!srcConfig.host) {
@@ -267,6 +295,7 @@ program
     let tgtConfig;
     if (opts.targetProfile) {
       tgtConfig = profiles.resolve(opts.targetProfile);
+      if (opts.targetAdapter) tgtConfig.adapter = opts.targetAdapter;
     } else if (opts.targetHost) {
       tgtConfig = {
         host:          opts.targetHost,
@@ -274,6 +303,7 @@ program
         password:      opts.targetPassword,
         defaultSchema: opts.targetSchema,
         libraryList:   opts.targetLibraryList,
+        adapter:       opts.targetAdapter || opts.adapter,
       };
     } else {
       console.error(chalk.red('Specify target: --target-profile <n> or --target-host <h>'));
@@ -371,7 +401,7 @@ profilesCmd
     for (const p of list) {
       const hostOrDb = p.database || p.host || '';
       console.log(
-        `  ${chalk.cyan(p.name.padEnd(18))} ${chalk.yellow((p.type || 'ibmi').padEnd(12))} ${hostOrDb}` +
+        `  ${chalk.cyan(p.name.padEnd(18))} ${chalk.yellow((p.type || 'ibmi').padEnd(12))} ${chalk.magenta((p.adapter || 'odbc').padEnd(6))} ${hostOrDb}` +
         (p.username      ? chalk.dim(`  user=${p.username}`)      : '') +
         (p.defaultSchema ? chalk.dim(`  schema=${p.defaultSchema}`) : '')
       );
@@ -383,6 +413,7 @@ profilesCmd
   .command('add <name>')
   .description('Add or update a profile')
   .option('--type <type>', 'Database type (e.g. ibmi, mssql, mysql)', 'ibmi')
+  .option('--adapter <adapter>', 'Connection adapter: odbc|idb (IBM i only)', 'odbc')
   .requiredOption('-H, --host <host>', 'IBM i hostname')
   .option('-u, --user <user>', 'Username')
   .option('--password <password>', 'Password (stored in plain text)')
@@ -393,6 +424,7 @@ profilesCmd
     const pm = new ProfileManager();
     pm.set(name, {
       type: opts.type,
+      adapter: opts.adapter,
       host: opts.host,
       username: opts.user,
       password: opts.password,
@@ -423,7 +455,8 @@ program
     for (const d of listDrivers()) {
       console.log(`  ${chalk.cyan(d.type.padEnd(14))} ${d.label}`);
     }
-    console.log(chalk.dim('\n  Use --type <type> when adding a profile.\n'));
+    console.log(chalk.dim('\n  Use --type <type> when adding a profile.'));
+    console.log(chalk.dim('  IBM i supports --adapter odbc (default) or --adapter idb on IBM i/PASE.\n'));
   });
 
 program.parse(process.argv);

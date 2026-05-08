@@ -138,7 +138,8 @@ class STRSQLSession {
       console.error(chalk.red('Connection failed: host is missing. Re-save the profile with --host.'));
       return;
     }
-    const label = config.host + (config.username ? `@${config.username}` : '');
+    const adapter = config.adapter || 'odbc';
+    const label = config.host + (config.username ? `@${config.username}` : '') + ` [${adapter}]`;
     process.stdout.write(chalk.dim(`Connecting to ${label}…`));
     try {
       this.conn = new IBMiConnection(config);
@@ -297,6 +298,7 @@ class STRSQLSession {
         for (let i = 0; i < args.length; i++) {
           switch (args[i]) {
             case '--type':     connCfg.type          = args[++i]; break;
+            case '--adapter':  connCfg.adapter       = args[++i]; break;
             case '--host':     connCfg.host          = args[++i]; break;
             case '--user':     connCfg.username      = args[++i]; break;
             case '--password': connCfg.password      = args[++i]; break;
@@ -313,7 +315,7 @@ class STRSQLSession {
         if (positional[3] && !connCfg.defaultSchema)  connCfg.defaultSchema = positional[3];
 
         if (!connCfg.host && !connCfg.database) {
-          console.error(chalk.red('Usage: \\connect <host> [user] [pwd] [schema] [--type TYPE]'));
+          console.error(chalk.red('Usage: \\connect <host> [user] [pwd] [schema] [--type TYPE] [--adapter odbc|idb]'));
           break;
         }
         if (this.conn) await this.conn.disconnect().catch(() => {});
@@ -339,7 +341,7 @@ class STRSQLSession {
         for (const p of list) {
           const hostOrDb = p.database || p.host || '';
           console.log(
-            `  ${chalk.cyan(p.name.padEnd(18))} ${chalk.yellow((p.type||'ibmi').padEnd(12))} ${hostOrDb}` +
+            `  ${chalk.cyan(p.name.padEnd(18))} ${chalk.yellow((p.type||'ibmi').padEnd(12))} ${chalk.magenta((p.adapter||'odbc').padEnd(6))} ${hostOrDb}` +
             (p.username      ? chalk.dim(`  user=${p.username}`)  : '') +
             (p.defaultSchema ? chalk.dim(`  schema=${p.defaultSchema}`) : '')
           );
@@ -353,7 +355,7 @@ class STRSQLSession {
         if (!pname) {
           console.error(chalk.red(
             'Usage: \\saveprofile <n> --type TYPE --host H [--user U] [--password P]\n' +
-            '                        [--schema S] [--database DB] [--port N]'
+            '                        [--schema S] [--database DB] [--port N] [--adapter odbc|idb]'
           ));
           break;
         }
@@ -361,6 +363,7 @@ class STRSQLSession {
         for (let i = 0; i < pfArgs.length; i++) {
           switch (pfArgs[i]) {
             case '--type':     pfCfg.type          = pfArgs[++i]; break;
+            case '--adapter':  pfCfg.adapter       = pfArgs[++i]; break;
             case '--host':     pfCfg.host          = pfArgs[++i]; break;
             case '--user':     pfCfg.username      = pfArgs[++i]; break;
             case '--password': pfCfg.password      = pfArgs[++i]; break;
@@ -375,6 +378,7 @@ class STRSQLSession {
           }
         }
         if (!pfCfg.type) pfCfg.type = 'ibmi';
+        if (!pfCfg.adapter) pfCfg.adapter = 'odbc';
         this.profiles.set(pname, pfCfg);
         const { getDriver: _gd } = require('../lib/drivers');
         const _lbl = _gd(pfCfg.type).label;
@@ -675,6 +679,7 @@ class STRSQLSession {
             case '--target-user':     tgtCfg.username      = args[++i]; break;
             case '--target-password': tgtCfg.password      = args[++i]; break;
             case '--target-schema':   tgtCfg.defaultSchema = args[++i]; break;
+            case '--target-adapter':  tgtCfg.adapter       = args[++i]; break;
             case '--target-table':    pipeOpts.targetTable = args[++i]; break;
             case '--sql':             pipeOpts.sourceSQL   = args[++i]; break;
             case '--where':           pipeOpts.where       = args[++i]; break;
@@ -708,6 +713,7 @@ class STRSQLSession {
           let targetConfig;
           if (tgtCfg.profile) {
             targetConfig = this.profiles.resolve(tgtCfg.profile);
+            if (tgtCfg.adapter) targetConfig.adapter = tgtCfg.adapter;
           } else if (tgtCfg.host) {
             targetConfig = tgtCfg;
           } else {
@@ -814,7 +820,8 @@ class STRSQLSession {
         for (const d of _ld()) {
           console.log(`  ${chalk.cyan(d.type.padEnd(14))} ${d.label}`);
         }
-        console.log(chalk.dim('\n  Use --type <type> in \\saveprofile or \\connect.\n'));
+        console.log(chalk.dim('\n  Use --type <type> in \\saveprofile or \\connect.'));
+        console.log(chalk.dim('  IBM i supports --adapter odbc (default) or --adapter idb on IBM i/PASE.\n'));
         break;
       }
 
@@ -934,7 +941,7 @@ class STRSQLSession {
           const typeLabel = this.conn.dbLabel || cfg.type || 'ibmi';
           const hostOrDb  = cfg.database || cfg.host || '?';
           let statusLine = chalk.green('● Connected') +
-            chalk.dim(`  [${typeLabel}]  host=${hostOrDb}  user=${cfg.username || '?'}  schema=${cfg.defaultSchema || '?'}`);
+            chalk.dim(`  [${typeLabel}]  adapter=${cfg.adapter || 'odbc'}  host=${hostOrDb}  user=${cfg.username || '?'}  schema=${cfg.defaultSchema || '?'}`);
           if (cfg.libraryList) {
             const libs = parseLibraryList(cfg.libraryList);
             statusLine += chalk.dim(`  libl=${libs.join(',')}`);
@@ -1288,6 +1295,7 @@ class STRSQLSession {
     console.log(`
 ${chalk.bold('Connection')}
   ${s('\\connect')} <host> [user] [pwd] [schema]   Connect to an IBM i system
+  ${d('  Add --adapter idb to use native idb-connector on IBM i/PASE')}
   ${s('\\disconnect')}                              Close current connection
   ${s('\\profile')} <name>                          Connect using saved profile
   ${s('\\status')}                                  Show connection status
@@ -1295,6 +1303,7 @@ ${chalk.bold('Connection')}
 ${chalk.bold('Profiles')}
   ${s('\\profiles')}                                List all saved profiles
   ${s('\\saveprofile')} <n> <host> [u] [p] [s]     Save a named profile
+  ${d('  Example: \\saveprofile local --type ibmi --adapter idb --host *LOCAL')}
   ${s('\\delprofile')} <name>                       Delete a profile
 
 ${chalk.bold('Schema & objects')}

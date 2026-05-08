@@ -1,8 +1,8 @@
 # strsql-node
 
-> Interactive SQL session emulator for Node.js via ODBC — IBM i/AS400 and beyond
+> Interactive SQL session emulator for Node.js via ODBC, with optional native Db2 for i support via `idb-connector`
 
-`strsql-node` emulates an interactive `STRSQL` session and provides a full toolkit for querying, exporting, importing, and transferring data across databases via ODBC. It ships as both a **CLI tool** and a **programmatic library**.
+`strsql-node` emulates an interactive `STRSQL` session and provides a full toolkit for querying, exporting, importing, and transferring data across databases. ODBC remains the default adapter; on IBM i/PASE you can select the native `idb-connector` adapter for Db2 for i without IBM i Access ODBC driver setup.
 
 > **⚠ Alpha software** — This package is in early alpha. Only the **IBM i** and **MySQL** ODBC drivers have been tested so far. Other supported databases (SQL Server, PostgreSQL, Oracle, DB2 LUW, SQLite) are implemented but untested — use them at your own risk and please report any issues.
 
@@ -59,9 +59,9 @@
 
 ## Supported databases
 
-| `--type` | Database | ODBC Driver |
+| `--type` | Database | Default adapter / driver |
 |---|---|---|
-| `ibmi` *(default)* | IBM i / AS400 / DB2 for i | IBM i Access ODBC Driver |
+| `ibmi` *(default)* | IBM i / AS400 / Db2 for i | `odbc` with IBM i Access ODBC Driver, or `idb` on IBM i/PASE |
 | `sqlserver` | Microsoft SQL Server | ODBC Driver 17 or 18 for SQL Server |
 | `postgresql` | PostgreSQL | PostgreSQL Unicode (psqlODBC) |
 | `mysql` | MySQL / MariaDB | MySQL Connector/ODBC 8.x or 9.x |
@@ -69,7 +69,27 @@
 | `db2` | DB2 LUW (Linux/Windows/AIX) | IBM DB2 ODBC DRIVER |
 | `sqlite` | SQLite | SQLite3 ODBC Driver |
 
-Each driver knows the correct ODBC connection string format, catalog queries, pagination syntax, literal formatting, upsert strategy, and DDL type mapping for its target database.
+Each driver knows the correct connection format, catalog queries, pagination syntax, literal formatting, upsert strategy, and DDL type mapping for its target database.
+
+### IBM i adapters
+
+`ibmi` supports two adapters:
+
+| Adapter | Where it runs | Notes |
+|---|---|---|
+| `odbc` *(default)* | Any supported Node.js host with an ODBC driver | Uses the existing IBM i Access ODBC connection path |
+| `idb` | IBM i/PASE only | Uses IBM's native `idb-connector`; no IBM i Access ODBC driver, unixODBC, or DSN setup |
+
+Examples:
+
+```bash
+strsql profiles add ibmi-odbc --type ibmi --adapter odbc --host 10.0.0.1 -u MYUSER --password secret -s MYLIB
+strsql profiles add ibmi-local --type ibmi --adapter idb --host '*LOCAL' -s MYLIB -l MYLIB,QGPL
+strsql --profile ibmi-local
+strsql --adapter idb --host '*LOCAL' -s MYLIB
+```
+
+`idb-connector` is an optional dependency because it installs and runs only on IBM i systems.
 
 > **Driver name mismatch?** If the installed ODBC driver has a different version name than the default (e.g. `MySQL ODBC 9.6 Unicode Driver` instead of `8.0`), add `--driver-name` when saving the profile or set `"driverName"` in `~/.strsql-node/profiles.json`.
 
@@ -139,6 +159,7 @@ Note: make sure you are logged in with `npm login` and have publish rights on `s
 | Variable | Description |
 |---|---|
 | `STRSQL_HOST` | Hostname / IP (or file path for SQLite) |
+| `STRSQL_ADAPTER` | Connection adapter: `odbc` or `idb` for IBM i |
 | `STRSQL_USER` | Username |
 | `STRSQL_PASSWORD` | Password |
 | `STRSQL_SCHEMA` | Default schema / library |
@@ -192,9 +213,11 @@ strsql --type sqlserver --host ss.local -u sa --password s3c --database MyDB
 ```bash
 # Table output (default)
 strsql run "SELECT * FROM MYLIB.ORDERS FETCH FIRST 10 ROWS ONLY" --profile ibmi-prod
+strsql run -q "SELECT * FROM MYLIB.ORDERS FETCH FIRST 10 ROWS ONLY" --profile ibmi-prod
 
 # Different formats
 strsql run "SELECT * FROM MYLIB.ORDERS" --format csv
+strsql run -q "SELECT * FROM MYLIB.ORDERS" --format csv
 strsql run "SELECT * FROM MYLIB.ORDERS" --format json  --out orders.json
 strsql run "SELECT * FROM MYLIB.ORDERS" --format insert --table MYLIB.ORDERS_COPY
 strsql run "SELECT * FROM MYLIB.ORDERS" --format merge  --table MYLIB.ORDERS_COPY --keys ORDNUM
@@ -477,7 +500,7 @@ export VISUAL="cursor --wait"       # Cursor
 
 ```
 strsql [session]        Interactive REPL (default)
-strsql run <sql>        Execute a single SQL statement
+strsql run [sql]        Execute a single SQL statement
 strsql import <file>    Import a file into a database
 strsql pipe             Transfer rows between two databases
 strsql profiles list    List saved profiles
@@ -490,6 +513,7 @@ strsql drivers          List supported database types
 
 | Option | Description |
 |---|---|
+| `-q, --query <sql>` | SQL query/statement to execute instead of positional `[sql]` |
 | `-p, --profile <n>` | Source connection profile |
 | `-H, --host / -u, --user / --password / -s, --schema` | Inline connection params |
 | `-l, --library-list <libs>` | IBM i library list (comma-separated) |

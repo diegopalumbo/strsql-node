@@ -33,5 +33,8 @@
     "dotenv": "^16.3.1",
     "odbc": "^2.4.9",
     "readline": "^1.3.0"
+  },
+  "optionalDependencies": {
+    "idb-connector": "^1.2.19"
   }
 }
