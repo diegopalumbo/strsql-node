@@ -63,8 +63,9 @@ class STRSQLSession {
     this.conn = null;
     this.history = new HistoryManager();
     this.profiles = new ProfileManager();
-    this.buffer = [];       // multi-line SQL buffer
-    this.lastResult = null; // for post-query export
+    this.buffer = [];         // multi-line SQL buffer
+    this.lastResult = null;   // for post-query export
+    this.systemNames = false; // show DDS system column names in SELECT results
     this.rl = null;
     this.completionCache = this._newCompletionCache();
   }
@@ -255,10 +256,11 @@ class STRSQLSession {
       if (isSelect) {
         const result = await this.conn.query(sql);
         this.lastResult = result;
-        // ── CHANGED: pipe table output through less ──────────────────────────
-        const formatted = this._formatTableForDisplay(result);
+        const displayResult = this.systemNames
+          ? await this._applySystemNames(result, sql)
+          : result;
+        const formatted = this._formatTableForDisplay(displayResult);
         await this._printResult(formatted.text, { force: formatted.forcePager });
-        // ────────────────────────────────────────────────────────────────────
       } else {
         const result = await this.conn.execute(sql);
         this.lastResult = result;
@@ -271,6 +273,60 @@ class STRSQLSession {
           console.error(chalk.dim(`  [${e.state}] ${e.message}`));
         }
       }
+    }
+  }
+
+  // ── system names lookup ────────────────────────────────────────────────────
+
+  /**
+   * Remap SELECT result column headers to their DDS system name (≤10 chars)
+   * when they differ from the SQL column name.
+   *
+   * Parses the first table reference after FROM in the SQL, then queries
+   * QSYS2.SYSCOLUMNS for COLUMN_NAME → SYSTEM_COLUMN_NAME.
+   * If the lookup fails (not IBM i, parse error, permission) the original
+   * result is returned unchanged.
+   *
+   * Column header format when names differ:  "SQL_NAME (SYS_NAME)"
+   */
+  async _applySystemNames(result, sql) {
+    if (!result || !result.columns || result.columns.length === 0) return result;
+    try {
+      // Extract first schema.table or table reference after FROM
+      const m = sql.match(/\bFROM\s+([A-Za-z_$#@][A-Za-z0-9_$#@]*(?:\.[A-Za-z_$#@][A-Za-z0-9_$#@]*)?)/i);
+      if (!m) return result;
+
+      const ref = m[1].toUpperCase();
+      const [schemaOrTable, tableOnly] = ref.includes('.') ? ref.split('.') : [null, ref];
+      const schema = schemaOrTable || this.conn?.config?.defaultSchema || '';
+      const table  = tableOnly;
+
+      if (!schema || !table) return result;
+
+      const sysResult = await this.conn.query(
+        `SELECT COLUMN_NAME, SYSTEM_COLUMN_NAME FROM QSYS2.SYSCOLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`,
+        [schema, table]
+      );
+
+      const map = {};
+      for (const row of sysResult.rows) {
+        const col = (row.COLUMN_NAME || '').trim().toUpperCase();
+        const sys = (row.SYSTEM_COLUMN_NAME || '').trim().toUpperCase();
+        if (col && sys && col !== sys) map[col] = sys;
+      }
+
+      if (Object.keys(map).length === 0) return result;
+
+      return {
+        ...result,
+        columns: result.columns.map(c => {
+          const sys = map[c.name.toUpperCase()];
+          return sys ? { ...c, name: sys } : c;
+        }),
+      };
+    } catch {
+      // Not IBM i, or table not found, or permission error — silently ignore
+      return result;
     }
   }
 
@@ -469,18 +525,29 @@ class STRSQLSession {
       case 'describe':
       case 'desc': {
         if (!this.conn?.isConnected()) { console.error(chalk.red('Not connected.')); break; }
-        const [table, schema] = args;
-        if (!table) { console.error(chalk.red('Usage: \\describe [schema.]TABLE')); break; }
+        const useSystemNames = this.systemNames || args.includes('--system-names');
+        const descArgs = args.filter(a => a !== '--system-names');
+        const [table, schema] = descArgs;
+        if (!table) { console.error(chalk.red('Usage: \\describe [schema.]TABLE [--system-names]')); break; }
         const [result, pkSet] = await Promise.all([
-          this.conn.describeTable(table, schema),
+          this.conn.describeTable(table, schema, { systemNames: useSystemNames }),
           this.conn.primaryKeys(table, schema),
         ]);
+        // When system names are active: replace COLUMN_NAME value with SYSTEM_COLUMN_NAME,
+        // then drop the SYSTEM_COLUMN_NAME column from the display.
+        if (useSystemNames && result.columns.some(c => c.name === 'SYSTEM_COLUMN_NAME')) {
+          result.rows = result.rows.map(row => ({
+            ...row,
+            COLUMN_NAME: (row.SYSTEM_COLUMN_NAME || row.COLUMN_NAME || '').trim(),
+            SYSTEM_COLUMN_NAME: undefined,
+          }));
+          result.columns = result.columns.filter(c => c.name !== 'SYSTEM_COLUMN_NAME');
+        }
         result.rows = result.rows.map(row => ({
           ...row,
           PK: pkSet.has((row.COLUMN_NAME || '').toUpperCase()) ? '🔑' : '',
         }));
         result.columns = [{ name: 'PK' }, ...result.columns];
-        // describe output is rarely long enough to need paging, but keep consistent
         const formatted = this._formatTableForDisplay(result);
         await this._printResult(formatted.text, { force: formatted.forcePager });
         break;
@@ -859,8 +926,10 @@ class STRSQLSession {
 
         let filePath = null;
         let stopOnError = false;
+        let runSystemNames = this.systemNames;
         for (const a of args) {
-          if (a === '--stop-on-error') stopOnError = true;
+          if (a === '--stop-on-error')  stopOnError = true;
+          else if (a === '--system-names') runSystemNames = true;
           else if (!a.startsWith('--')) filePath = a;
         }
         if (!filePath) {
@@ -906,10 +975,11 @@ class STRSQLSession {
               const result = await this.conn.query(sql);
               this.lastResult = result;
               console.log(chalk.dim(`${label} SELECT → ${result.rowCount} row(s)`));
-              // ── CHANGED: pipe \run SELECT results through less too ──────────
-              const formatted = this._formatTableForDisplay(result);
+              const displayResult = runSystemNames
+                ? await this._applySystemNames(result, sql)
+                : result;
+              const formatted = this._formatTableForDisplay(displayResult);
               await this._printResult(formatted.text, { force: formatted.forcePager });
-              // ────────────────────────────────────────────────────────────────
             } else {
               const result = await this.conn.execute(sql);
               this.lastResult = result;
@@ -938,20 +1008,41 @@ class STRSQLSession {
       }
 
       case 'status': {
+        const { detectPager } = require('../lib/pager');
+        const pagerBin  = detectPager();
+        const pagerDisabled = process.env.STRSQL_NO_PAGER === '1';
+        const pagerStr  = pagerDisabled ? chalk.yellow('OFF') : (pagerBin ? chalk.green(pagerBin) : chalk.dim('(none)'));
+
         if (this.conn?.isConnected()) {
           const cfg = this.conn.config;
           const typeLabel = this.conn.dbLabel || cfg.type || 'ibmi';
           const hostOrDb  = cfg.database || cfg.host || '?';
-          let statusLine = chalk.green('● Connected') +
-            chalk.dim(`  [${typeLabel}]  adapter=${cfg.adapter || 'odbc'}  host=${hostOrDb}  user=${cfg.username || '?'}  schema=${cfg.defaultSchema || '?'}`);
+          console.log(
+            chalk.green('● Connected') +
+            chalk.dim(`  [${typeLabel}]  adapter=${cfg.adapter || 'odbc'}  host=${hostOrDb}  user=${cfg.username || '?'}  schema=${cfg.defaultSchema || '?'}`)
+          );
           if (cfg.libraryList) {
             const libs = parseLibraryList(cfg.libraryList);
-            statusLine += chalk.dim(`  libl=${libs.join(',')}`);
+            console.log(chalk.dim(`  libl:      `) + chalk.dim(libs.join(', ')));
           }
-          console.log(statusLine);
         } else {
           console.log(chalk.red('● Not connected'));
         }
+        console.log(chalk.dim(`  sysnames:  `) + (this.systemNames ? chalk.green('ON') : chalk.yellow('OFF')));
+        console.log(chalk.dim(`  pager:     `) + pagerStr);
+        break;
+      }
+
+      // ── \sysnames — toggle DDS system column names in query results ────────
+      case 'sysnames': {
+        const snArg = (args[0] || '').toLowerCase();
+        if (snArg === 'on')       this.systemNames = true;
+        else if (snArg === 'off') this.systemNames = false;
+        else                      this.systemNames = !this.systemNames;
+        console.log(chalk.dim(
+          `System names in query headers: ${this.systemNames ? chalk.green('ON') : chalk.yellow('OFF')}` +
+          (this.systemNames ? '  (IBM i only — parses FROM clause for table lookup)' : '')
+        ));
         break;
       }
 
@@ -1552,7 +1643,7 @@ class STRSQLSession {
       '\\schema', '\\libl', '\\tables', '\\describe',
       '\\export', '\\import', '\\pipe', '\\ddl', '\\run',
       '\\drivers', '\\history', '\\hsearch', '\\status', '\\clear',
-      '\\pager', '\\nopager', '\\pagerstatus', '\\cmd',
+      '\\pager', '\\nopager', '\\pagerstatus', '\\sysnames', '\\cmd',
       '\\migrations', '\\seeds',
     ];
 
@@ -1607,12 +1698,16 @@ ${chalk.bold('Schema & objects')}
   ${s('\\libl')} LIB1,LIB2,...                      Set IBM i library list
   ${s('\\libl')}                                    Show current IBM i library list
   ${s('\\tables')} [schema]                         List tables in a schema
-  ${s('\\describe')} [schema.]TABLE                 Describe table columns
+  ${s('\\describe')} [schema.]TABLE ${d('[--system-names]')}   Describe table columns
+  ${s('\\sysnames')} ${d('[on|off]')}                        Toggle DDS system names for session
+  ${d('  When ON: \\describe shows SYSTEM_COLUMN_NAME (≤10 chars) instead of COLUMN_NAME')}
+  ${d('           SELECT results use SYSTEM_COLUMN_NAME as column header')}
+  ${d('           \\run and \\describe --system-names activate it for a single command')}
 
 ${chalk.bold('SQL execution')}
   ${d('Enter SQL and end with ; or type GO/RUN on its own line')}
   ${d('Multi-line input supported — press Enter to continue')}
-  ${s('\\run')} <file.sql> ${d('[--stop-on-error]')}     Execute SQL from a file
+  ${s('\\run')} <file.sql> ${d('[--stop-on-error] [--system-names]')}   Execute SQL from a file
 
 ${chalk.bold('Export')}
   ${s('\\export')} <file.csv>                        Export last result as CSV
