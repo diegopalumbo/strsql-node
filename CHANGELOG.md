@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.15] - 2026-05-09
+
+### Fixed
+- **`\describe` — PK detection on IBM i**: the `🔑` indicator was never shown for any IBM i table. The previous implementation queried only `QSYS2.SYSKEYS WHERE INDEX_NAME = TABLE_NAME`, which applies solely to DDS physical files whose primary access path shares the file name. SQL tables with a `PRIMARY KEY` or `UNIQUE` constraint (the far more common case) were silently missed. Detection now uses three strategies in order:
+  1. **ODBC `SQLPrimaryKeys` catalog function** (`conn.primaryKeys()`) — covers SQL `PRIMARY KEY` constraints natively via the IBM i Access ODBC driver
+  2. **`QSYS2.SYSCSTCOL` + `QSYS2.SYSCST`** — SQL fallback covering both `PRIMARY KEY` and `UNIQUE` constraints, compatible with all IBM i OS versions; when both types exist the `PRIMARY KEY` constraint is preferred
+  3. **`QSYS2.SYSKEYS`** — final fallback for DDS physical files whose key access path has `INDEX_NAME = TABLE_NAME`
+
+---
+
 ## [1.0.14] - 2026-05-08
 
 ### Fixed
