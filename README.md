@@ -293,7 +293,8 @@ Additional options for `\saveprofile`:
 | `\schema [name]` | Show or set default schema |
 | `\libl [LIB1,LIB2,...]` | Show or set IBM i library list |
 | `\tables [schema]` | List tables (uses native catalog per DB) |
-| `\describe [schema.]TABLE` | Describe table columns |
+| `\describe [schema.]TABLE [--system-names]` | Describe table columns |
+| `\sysnames [on\|off]` | Toggle DDS system names for the session |
 
 The `\libl` command replaces the user portion of the IBM i job library list via `CHGLIBL` and `QSYS2.QCMDEXC`. Without arguments it displays the configured user library list and current library.
 
@@ -306,7 +307,21 @@ SQL> \libl DIEGOPAL1,DIEGOPAL
 Square brackets in command descriptions mean “optional argument”; they are not part of the value to type.
 
 On IBM i, the current library is separate from the user library list. If IBM i rejects a `\libl` command with `CPF2184`, check whether one of the requested libraries is already the current library or whether the user lacks authority to one of the libraries.
+#### DDS system column names (`\sysnames`)
 
+On IBM i, every column has two names: the SQL `COLUMN_NAME` (up to 128 chars) and the DDS `SYSTEM_COLUMN_NAME` (up to 10 chars, the original RPG/DDS field name). Use `\sysnames` to switch between them.
+
+```sql
+SQL> \sysnames on          -- query headers show SYSTEM_COLUMN_NAME
+SQL> \sysnames off         -- query headers show COLUMN_NAME (default)
+SQL> \sysnames             -- toggle
+```
+
+When active, the mapping is applied to:
+- **SELECT results** — column headers are replaced with the DDS system name.
+- **`\describe`** — the `COLUMN_NAME` column shows the DDS system name instead of the SQL name. Pass `--system-names` to activate it for a single `\describe` call without toggling the session flag.
+
+`\status` always shows the current state of `sysnames`.
 ### SQL execution
 
 End a statement with `;` or type `GO` / `RUN` on its own line. Multi-line input is supported.
@@ -355,7 +370,7 @@ SQL> \run /path/to/queries.sql
 SQL> \run updates.sql --stop-on-error
 ```
 
-The file is split on `;` delimiters, line comments (`--`) are stripped, and each statement is executed sequentially. By default execution continues on error; use `--stop-on-error` to halt at the first failure. A summary with counts and elapsed time is printed at the end.
+The file is split on `;` delimiters, line comments (`--`) are stripped, and each statement is executed sequentially. By default execution continues on error; use `--stop-on-error` to halt at the first failure. A summary with counts and elapsed time is printed at the end. Pass `--system-names` to display DDS system column names in SELECT output for that run (equivalent to `\sysnames on` but scoped to the file).
 
 ### Export
 
