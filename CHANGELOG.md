@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.16] - 2026-05-09
+
+### Added
+- **Migrations & Seeds** — integrated the `ibmi-db-migrations` library directly into `strsql-node`. Four new CLI subcommands are now available:
+  - **`strsql migrate <path> [up|down]`** — apply or roll back versioned SQL migrations. Migrations are stored as `.up.sql` / `.down.sql` file pairs; a `MIGRATION_LOG` table (configurable via `--migration-table`) tracks which files have been applied. On `down` the most recently applied migration is rolled back.
+  - **`strsql seed <path> [up|down]`** — apply or roll back data seeds using the same file-pair convention. Applied seeds are tracked in a `SEED_LOG` table (configurable via `--seed-table`).
+  - **`strsql migration:create <path> <name>`** — scaffold a timestamped migration file pair. Pass `--from-table SCHEMA.TABLE` to have the `.up.sql` pre-populated with the table's `CREATE TABLE` DDL (generated from the live database) and the `.down.sql` pre-populated with the corresponding `DROP TABLE`.
+  - **`strsql seed:create <path> <name>`** — scaffold a timestamped seed file pair. Pass `--from-table TABLE` (or `-q <sql>` with `--table`) to pre-populate the `.up.sql` with `INSERT` or `MERGE/UPSERT` statements generated from live data; primary keys are auto-detected when `--format upsert` is used with `--from-table`. An interactive prompt offers to generate a `DELETE FROM` rollback in the `.down.sql`.
+- **Programmatic API** — `runMigrations`, `runSeeds`, `createMigration`, and `createSeed` are now exported from `strsql-node`'s public API (`src/lib/index.js`).
+- **`src/lib/migrations/` module** — new internal module containing `migrate.js` (low-level migration helpers), `migrationRunner.js`, `seedRunner.js`, and `create.js`.
+- All migration/seed commands honour the full connection option set (`--profile`, `--host`, `--user`, `--password`, `--schema`, `--library-list`, `--adapter`) consistent with other `strsql` subcommands.
+
+---
+
 ## [1.0.15] - 2026-05-09
 
 ### Fixed
