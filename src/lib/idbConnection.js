@@ -208,11 +208,25 @@ class Db2iIdbConnection {
       resolvedSchema = await this._resolveSchemaFromLibl(tableName);
     }
     const spec = this.driver.primaryKeysSQL(resolvedSchema, tableName);
+    const _extract = (s, raw) => {
+      const rows = s.mapRow ? raw.rows.map(s.mapRow).filter(Boolean) : raw.rows;
+      return rows.map(r => (r.COLUMN_NAME || r.column_name || '').toUpperCase());
+    };
     try {
-      const raw = await this.query(spec.sql, spec.params);
-      const rows = spec.mapRow ? raw.rows.map(spec.mapRow).filter(Boolean) : raw.rows;
-      return new Set(rows.map(r => (r.COLUMN_NAME || r.column_name || '').toUpperCase()));
+      const raw  = await this.query(spec.sql, spec.params);
+      const cols = _extract(spec, raw);
+      if (cols.length === 0 && spec.fallback) {
+        const raw2 = await this.query(spec.fallback.sql, spec.fallback.params);
+        return new Set(_extract(spec.fallback, raw2));
+      }
+      return new Set(cols);
     } catch (err) {
+      if (spec.fallback) {
+        try {
+          const raw2 = await this.query(spec.fallback.sql, spec.fallback.params);
+          return new Set(_extract(spec.fallback, raw2));
+        } catch { /* fall through to warning */ }
+      }
       process.stderr.write(`[warn] primaryKeys query failed: ${err.message}\n`);
       return new Set();
     }

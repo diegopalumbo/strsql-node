@@ -67,15 +67,38 @@ const DRIVERS = {
       };
     },
     primaryKeysSQL(schema, table) {
-      // QSYS2.SYSKEYS holds key columns for both SQL-constraint PKs and DDS
-      // physical file keys. The primary access path of a physical file has
-      // INDEX_NAME = TABLE_NAME and INDEX_SCHEMA = TABLE_SCHEMA.
+      const s = schema.toUpperCase();
+      const t = table.toUpperCase();
       return {
-        sql: `SELECT COLUMN_NAME
-              FROM QSYS2.SYSKEYS
-              WHERE INDEX_SCHEMA = ? AND INDEX_NAME = ?
-              ORDER BY ORDINAL_POSITION`,
-        params: [schema.toUpperCase(), table.toUpperCase()],
+        // QSYS2.SYSCSTCOL has TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME directly.
+        // Join with SYSCST only for the constraint type filter.
+        // Covers PRIMARY KEY and UNIQUE (IBM i commonly uses UNIQUE instead of PRIMARY KEY).
+        // The scalar subquery picks one constraint, preferring PRIMARY KEY over UNIQUE.
+        sql: `SELECT csc.COLUMN_NAME
+              FROM QSYS2.SYSCSTCOL csc
+              JOIN QSYS2.SYSCST cst
+                ON csc.CONSTRAINT_NAME   = cst.CONSTRAINT_NAME
+               AND csc.CONSTRAINT_SCHEMA = cst.CONSTRAINT_SCHEMA
+              WHERE cst.CONSTRAINT_TYPE IN ('PRIMARY KEY', 'UNIQUE')
+                AND csc.TABLE_SCHEMA = ? AND csc.TABLE_NAME = ?
+                AND cst.CONSTRAINT_NAME = (
+                  SELECT CONSTRAINT_NAME FROM QSYS2.SYSCST
+                  WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+                    AND CONSTRAINT_TYPE IN ('PRIMARY KEY', 'UNIQUE')
+                  ORDER BY CASE CONSTRAINT_TYPE WHEN 'PRIMARY KEY' THEN 0 ELSE 1 END,
+                           CONSTRAINT_NAME
+                  FETCH FIRST 1 ROW ONLY
+                )`,
+        params: [s, t, s, t],
+        // DDS physical files: primary access path has INDEX_NAME = TABLE_NAME.
+        // Used when the first query errors or returns no rows.
+        fallback: {
+          sql: `SELECT COLUMN_NAME
+                FROM QSYS2.SYSKEYS
+                WHERE INDEX_SCHEMA = ? AND INDEX_NAME = ?
+                ORDER BY ORDINAL_POSITION`,
+          params: [s, t],
+        },
       };
     },
     paginateSQL(inner, offset, limit) {

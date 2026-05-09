@@ -206,12 +206,42 @@ class ODBCConnection {
     if (!resolvedSchema && this.config.libraryList) {
       resolvedSchema = await this._resolveSchemaFromLibl(tableName);
     }
+    // For IBM i, prefer the ODBC SQLPrimaryKeys catalog function (conn.primaryKeys())
+    // which correctly handles both SQL PRIMARY KEY constraints and DDS physical file
+    // key fields — without relying on SQL catalog views that may not cover DDS objects.
+    if (this.type === 'ibmi' && typeof this.conn.primaryKeys === 'function') {
+      try {
+        const rows = await this.conn.primaryKeys(
+          null,
+          resolvedSchema || null,
+          tableName.toUpperCase()
+        );
+        if (rows && rows.length > 0) {
+          return new Set(rows.map(r => (r.COLUMN_NAME || '').toUpperCase()));
+        }
+      } catch { /* fall through to SQL approach */ }
+    }
+
     const spec = this.driver.primaryKeysSQL(resolvedSchema, tableName);
+    const _extract = (s, raw) => {
+      const rows = s.mapRow ? raw.rows.map(s.mapRow).filter(Boolean) : raw.rows;
+      return rows.map(r => (r.COLUMN_NAME || r.column_name || '').toUpperCase());
+    };
     try {
-      const raw = await this.query(spec.sql, spec.params);
-      const rows = spec.mapRow ? raw.rows.map(spec.mapRow).filter(Boolean) : raw.rows;
-      return new Set(rows.map(r => (r.COLUMN_NAME || r.column_name || '').toUpperCase()));
+      const raw  = await this.query(spec.sql, spec.params);
+      const cols = _extract(spec, raw);
+      if (cols.length === 0 && spec.fallback) {
+        const raw2 = await this.query(spec.fallback.sql, spec.fallback.params);
+        return new Set(_extract(spec.fallback, raw2));
+      }
+      return new Set(cols);
     } catch (err) {
+      if (spec.fallback) {
+        try {
+          const raw2 = await this.query(spec.fallback.sql, spec.fallback.params);
+          return new Set(_extract(spec.fallback, raw2));
+        } catch { /* fall through to warning */ }
+      }
       process.stderr.write(`[warn] primaryKeys query failed: ${err.message}\n`);
       return new Set();
     }
