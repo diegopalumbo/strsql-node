@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [1.0.16] - 2026-05-09
 
 ### Added
 - **`\sysnames [on|off]`** — session toggle to display DDS system column names (≤10 chars) instead of SQL column names in SELECT results and `\describe` output. When enabled, `_applySystemNames()` queries `QSYS2.SYSCOLUMNS` for the first table found in the `FROM` clause and remaps headers accordingly. If the names are identical (already ≤10 chars) no change is applied. Silently ignored on non-IBM i databases.
