@@ -43,6 +43,7 @@
   - [History](#history)
   - [Shell commands](#shell-commands)
   - [SQL editor](#sql-editor)
+  - [Migrations & Seeds (session)](#migrations--seeds-session)
 - [CLI subcommands](#cli-subcommands)
 - [Migrations & Seeds](#migrations--seeds)
   - [`migrate`](#strsql-migrate-path-action)
@@ -291,6 +292,8 @@ Additional options for `\saveprofile`:
 - `--ssl` — PostgreSQL SSL mode (`disable` / `require` / `verify-ca` / `verify-full`)
 - `--naming sql|system` — IBM i naming mode
 - `--library-list LIB1,LIB2,...` — IBM i library list (alias: `--libl`)
+- `--migration-table <name>` — default tracking table for `\migrations run` (stored in profile)
+- `--seed-table <name>` — default tracking table for `\seeds run` (stored in profile)
 
 ### Schema & objects
 
@@ -499,6 +502,36 @@ export VISUAL="cursor --wait"       # Cursor
 ```
 
 > **Tip:** add the export to your shell profile (`~/.zshrc`, `~/.bashrc`) to make it permanent.
+
+### Migrations & Seeds (session)
+
+Run migrations and seeds against the currently connected database without leaving the REPL.
+
+```
+\migrations run <path> [up|down] [--migration-table <name>]
+\migrations create <path> <name> [--from-table [SCHEMA.]TABLE]
+\seeds run <path> [up|down] [--seed-table <name>]
+\seeds create <path> <name> [-q <sql>] [--from-table TABLE] [--table T] [--format insert|upsert] [--keys cols] [--batch N]
+```
+
+| Command | Description |
+|---|---|
+| `\migrations run <path> [up\|down]` | Apply all pending migrations (`up`, default) or roll back the last one (`down`) |
+| `\migrations create <path> <name>` | Scaffold a timestamped migration file pair; add `--from-table` to pre-populate DDL |
+| `\seeds run <path> [up\|down]` | Apply all pending seeds (`up`) or roll back the last one (`down`) |
+| `\seeds create <path> <name>` | Scaffold a seed file pair; supports `--from-table`, `-q`, `--format upsert`, etc. |
+
+Options for `\migrations run` / `\seeds run`:
+- `--migration-table <name>` — tracking table (default: `MIGRATION_LOG`; also read from the active profile)
+- `--seed-table <name>` — tracking table (default: `SEED_LOG`; also read from the active profile)
+
+Options for `\seeds create`:
+- `-q <sql>` — SQL query whose results become the seed data
+- `--from-table <TABLE>` — use `SELECT * FROM <TABLE>` as the source query
+- `--table <T>` — target table for `INSERT`/`UPSERT` (required with `-q`)
+- `--format insert|upsert` — output format (default: `insert`)
+- `--keys <cols>` — key columns for upsert, comma-separated
+- `-b, --batch <N>` — rows per INSERT statement (default: `100`)
 
 ---
 

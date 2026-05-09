@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Programmatic API** — `runMigrations`, `runSeeds`, `createMigration`, and `createSeed` are now exported from `strsql-node`'s public API (`src/lib/index.js`).
 - **`src/lib/migrations/` module** — new internal module containing `migrate.js` (low-level migration helpers), `migrationRunner.js`, `seedRunner.js`, and `create.js`.
 - All migration/seed commands honour the full connection option set (`--profile`, `--host`, `--user`, `--password`, `--schema`, `--library-list`, `--adapter`) consistent with other `strsql` subcommands.
+- **Interactive session — `\migrations` and `\seeds`** — the same migration and seed operations are now available inside an active `strsql` session without leaving the REPL:
+  - **`\migrations run <path> [up|down] [--migration-table <name>]`** — apply or roll back migrations against the currently connected database.
+  - **`\migrations create <path> <name> [--from-table [SCHEMA.]TABLE]`** — scaffold a timestamped migration file pair; `--from-table` generates DDL from the live connection.
+  - **`\seeds run <path> [up|down] [--seed-table <name>]`** — apply or roll back seeds.
+  - **`\seeds create <path> <name> [-q <sql>] [--from-table TABLE] [--table T] [--format insert|upsert] [--keys cols] [--batch N]`** — scaffold a seed file pair, optionally pre-populated from live data.
+- **`\saveprofile` / profiles** — two new options: `--migration-table <name>` and `--seed-table <name>` can now be stored in a named profile and will be used as defaults by `\migrations run` and `\seeds run`.
 
 ---
 
