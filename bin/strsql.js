@@ -89,8 +89,9 @@ program
 program
   .command('session', { isDefault: true })
   .description('Start an interactive SQL session (default)')
+  .helpOption('--help', 'display help for command')
   .option('-p, --profile <name>',  'Named connection profile to use')
-  .option('-H, --host <host>',     'IBM i hostname (overrides profile)')
+  .option('-h, --host <host>',     'IBM i hostname (overrides profile)')
   .option('-u, --user <user>',     'Username')
   .option('--password <password>', 'Password (prefer STRSQL_PASSWORD env var)')
   .option('-s, --schema <schema>', 'Default schema/library')
@@ -124,9 +125,10 @@ program
 program
   .command('run [sql]')
   .description('Execute a single SQL statement and exit')
+  .helpOption('--help', 'display help for command')
   .option('-q, --query <sql>',      'SQL query/statement to execute')
   .option('-p, --profile <name>',   'Named connection profile')
-  .option('-H, --host <host>',      'IBM i hostname')
+  .option('-h, --host <host>',      'IBM i hostname')
   .option('-u, --user <user>',      'Username')
   .option('--password <password>',  'Password')
   .option('-s, --schema <schema>',  'Default schema')
@@ -150,8 +152,9 @@ program
 program
   .command('import <file>')
   .description('Import a file into IBM i (CSV, JSON, SQL)')
+  .helpOption('--help', 'display help for command')
   .option('-p, --profile <n>',       'Named connection profile')
-  .option('-H, --host <host>',       'IBM i hostname')
+  .option('-h, --host <host>',       'IBM i hostname')
   .option('-u, --user <user>',       'Username')
   .option('--password <password>',   'Password')
   .option('-s, --schema <schema>',   'Default schema')
@@ -232,9 +235,10 @@ program
 program
   .command('pipe')
   .description('Transfer rows from source IBM i to target IBM i (DB2 → DB2)')
+  .helpOption('--help', 'display help for command')
   // ── source ──
   .option('-p, --profile <n>',             'Source connection profile')
-  .option('-H, --host <host>',             'Source IBM i hostname')
+  .option('-h, --host <host>',             'Source IBM i hostname')
   .option('-u, --user <user>',             'Source username')
   .option('--password <password>',         'Source password')
   .option('-s, --schema <schema>',         'Source default schema')
@@ -412,14 +416,17 @@ profilesCmd
 profilesCmd
   .command('add <name>')
   .description('Add or update a profile')
+  .helpOption('--help', 'display help for command')
   .option('--type <type>', 'Database type (e.g. ibmi, mssql, mysql)', 'ibmi')
   .option('--adapter <adapter>', 'Connection adapter: odbc|idb (IBM i only)', 'odbc')
-  .requiredOption('-H, --host <host>', 'IBM i hostname')
+  .requiredOption('-h, --host <host>', 'IBM i hostname')
   .option('-u, --user <user>', 'Username')
-  .option('--password <password>', 'Password (stored in plain text)')
+  .option('-p, --password <password>', 'Password (stored in plain text)')
   .option('-s, --schema <schema>', 'Default schema/library')
   .option('-l, --library-list <libs>', 'IBM i library list (comma-separated)')
   .option('--naming <mode>', 'Naming mode: sql or system', 'sql')
+  .option('--migration-table <name>', 'Default migration tracking table (e.g. MYLIB.MIGRATION_LOG)')
+  .option('--seed-table <name>',      'Default seed tracking table (e.g. MYLIB.SEED_LOG)')
   .action((name, opts) => {
     const pm = new ProfileManager();
     pm.set(name, {
@@ -431,6 +438,8 @@ profilesCmd
       defaultSchema: opts.schema,
       libraryList: opts.libraryList,
       namingMode: opts.naming,
+      ...(opts.migrationTable && { migrationTable: opts.migrationTable }),
+      ...(opts.seedTable      && { seedTable:      opts.seedTable }),
     });
     console.log(chalk.green(`Profile "${name}" saved.`));
   });
@@ -476,18 +485,23 @@ function parseTableRef(tableRef, defaultSchema) {
   return { schema, table: tableRef, qualified: schema ? `${schema}.${tableRef}` : tableRef };
 }
 
-// ─── strsql migrate <path> [up|down] ─────────────────────────────────────────
-program
-  .command('migrate <path> [action]')
-  .description('Run database migrations against the connected DB (default action: up)')
+// ─── strsql migrations run|create ────────────────────────────────────────────
+const migrationsCmd = program
+  .command('migrations')
+  .description('Manage database migrations');
+
+migrationsCmd
+  .command('run <path> [action]')
+  .description('Run migrations against the connected DB (default action: up)')
+  .helpOption('--help', 'display help for command')
   .option('-p, --profile <name>',          'Named connection profile')
-  .option('-H, --host <host>',             'Hostname')
+  .option('-h, --host <host>',             'Hostname')
   .option('-u, --user <user>',             'Username')
   .option('--password <password>',         'Password')
   .option('-s, --schema <schema>',         'Default schema (also used to qualify the tracking table)')
   .option('-l, --library-list <libs>',     'IBM i library list (comma-separated)')
   .option('--adapter <adapter>',           'Connection adapter: odbc|idb (IBM i only)')
-  .option('--migration-table <name>',      'Tracking table name (default: MIGRATION_LOG)', 'MIGRATION_LOG')
+  .option('--migration-table <name>',      'Tracking table name (overrides profile setting, default: MIGRATION_LOG)')
   .action(async (migrationsPath, action, opts) => {
     const resolvedAction = action || 'up';
     if (!['up', 'down'].includes(resolvedAction)) {
@@ -506,7 +520,7 @@ program
       await runMigrations(resolvedAction, {
         config,
         migrationsPath: require('path').resolve(migrationsPath),
-        migrationTable: opts.migrationTable,
+        migrationTable: opts.migrationTable || config.migrationTable || 'MIGRATION_LOG',
         schema:         config.defaultSchema || '',
       });
     } catch (err) {
@@ -515,52 +529,13 @@ program
     }
   });
 
-// ─── strsql seed <path> [up|down] ────────────────────────────────────────────
-program
-  .command('seed <path> [action]')
-  .description('Run database seeds against the connected DB (default action: up)')
-  .option('-p, --profile <name>',          'Named connection profile')
-  .option('-H, --host <host>',             'Hostname')
-  .option('-u, --user <user>',             'Username')
-  .option('--password <password>',         'Password')
-  .option('-s, --schema <schema>',         'Default schema (also used to qualify the tracking table)')
-  .option('-l, --library-list <libs>',     'IBM i library list (comma-separated)')
-  .option('--adapter <adapter>',           'Connection adapter: odbc|idb (IBM i only)')
-  .option('--seed-table <name>',           'Tracking table name (default: SEED_LOG)', 'SEED_LOG')
-  .action(async (seedsPath, action, opts) => {
-    const resolvedAction = action || 'up';
-    if (!['up', 'down'].includes(resolvedAction)) {
-      console.error(chalk.red(`Invalid action "${resolvedAction}". Use "up" or "down".`));
-      process.exit(1);
-    }
-    applyConnectionEnv(opts);
-    const profiles = new ProfileManager();
-    const config   = profiles.resolve(opts.profile);
-    if (!config.host) {
-      console.error(chalk.red('No host specified. Use --host or --profile.'));
-      process.exit(1);
-    }
-    const { runSeeds } = require('../src/lib/migrations/seedRunner');
-    try {
-      await runSeeds(resolvedAction, {
-        config,
-        seedsPath: require('path').resolve(seedsPath),
-        seedTable: opts.seedTable,
-        schema:    config.defaultSchema || '',
-      });
-    } catch (err) {
-      console.error(chalk.red(`Seeds failed: ${err.message}`));
-      process.exit(1);
-    }
-  });
-
-// ─── strsql migration:create <path> <name> ───────────────────────────────────
-program
-  .command('migration:create <path> <name>')
+migrationsCmd
+  .command('create <path> <name>')
   .description('Create a new migration file pair (.up.sql / .down.sql)')
+  .helpOption('--help', 'display help for command')
   .option('--from-table <TABLE>',          'Populate .up.sql with CREATE TABLE DDL from DB')
   .option('-p, --profile <name>',          'Named connection profile (required with --from-table)')
-  .option('-H, --host <host>',             'Hostname')
+  .option('-h, --host <host>',             'Hostname')
   .option('-u, --user <user>',             'Username')
   .option('--password <password>',         'Password')
   .option('-s, --schema <schema>',         'Default schema')
@@ -601,10 +576,54 @@ program
     console.log(chalk.green(`Created migration files:\n  ${upFile}\n  ${downFile}`));
   });
 
-// ─── strsql seed:create <path> <name> ────────────────────────────────────────
-program
-  .command('seed:create <path> <name>')
+// ─── strsql seeds run|create ──────────────────────────────────────────────────
+const seedsCmd = program
+  .command('seeds')
+  .description('Manage database seeds');
+
+seedsCmd
+  .command('run <path> [action]')
+  .description('Run seeds against the connected DB (default action: up)')
+  .helpOption('--help', 'display help for command')
+  .option('-p, --profile <name>',          'Named connection profile')
+  .option('-h, --host <host>',             'Hostname')
+  .option('-u, --user <user>',             'Username')
+  .option('--password <password>',         'Password')
+  .option('-s, --schema <schema>',         'Default schema (also used to qualify the tracking table)')
+  .option('-l, --library-list <libs>',     'IBM i library list (comma-separated)')
+  .option('--adapter <adapter>',           'Connection adapter: odbc|idb (IBM i only)')
+  .option('--seed-table <name>',           'Tracking table name (overrides profile setting, default: SEED_LOG)')
+  .action(async (seedsPath, action, opts) => {
+    const resolvedAction = action || 'up';
+    if (!['up', 'down'].includes(resolvedAction)) {
+      console.error(chalk.red(`Invalid action "${resolvedAction}". Use "up" or "down".`));
+      process.exit(1);
+    }
+    applyConnectionEnv(opts);
+    const profiles = new ProfileManager();
+    const config   = profiles.resolve(opts.profile);
+    if (!config.host) {
+      console.error(chalk.red('No host specified. Use --host or --profile.'));
+      process.exit(1);
+    }
+    const { runSeeds } = require('../src/lib/migrations/seedRunner');
+    try {
+      await runSeeds(resolvedAction, {
+        config,
+        seedsPath: require('path').resolve(seedsPath),
+        seedTable: opts.seedTable || config.seedTable || 'SEED_LOG',
+        schema:    config.defaultSchema || '',
+      });
+    } catch (err) {
+      console.error(chalk.red(`Seeds failed: ${err.message}`));
+      process.exit(1);
+    }
+  });
+
+seedsCmd
+  .command('create <path> <name>')
   .description('Create a new seed file pair (.up.sql / .down.sql)')
+  .helpOption('--help', 'display help for command')
   .option('-q, --query <sql>',             'SQL query whose results become the seed data')
   .option('--from-table <TABLE>',          'Use SELECT * FROM <TABLE> as the seed query')
   .option('--table <table>',               'Target table for INSERT/UPSERT statements (required with -q)')
@@ -612,7 +631,7 @@ program
   .option('--keys <cols>',                 'Key columns for upsert, comma-separated (required with --format upsert and -q)')
   .option('-b, --batch <n>',              'Rows per INSERT statement (default: 100)', '100')
   .option('-p, --profile <name>',          'Named connection profile')
-  .option('-H, --host <host>',             'Hostname')
+  .option('-h, --host <host>',             'Hostname')
   .option('-u, --user <user>',             'Username')
   .option('--password <password>',         'Password')
   .option('-s, --schema <schema>',         'Default schema')
@@ -643,7 +662,6 @@ program
 
       const { IBMiConnection } = require('../src/lib/connection');
       const { toInsert, toMerge } = require('../src/lib/formatter');
-      const readline = require('readline');
 
       let sql, targetTable, keys = [];
 
@@ -651,7 +669,6 @@ program
         const { schema, table, qualified } = parseTableRef(opts.fromTable, config.defaultSchema);
         sql         = `SELECT * FROM ${qualified}`;
         targetTable = opts.table || qualified;
-        // Store for PK resolution below
         opts._fromSchema = schema;
         opts._fromTable  = table;
       } else {
@@ -667,7 +684,6 @@ program
           if (opts.keys) {
             keys = opts.keys.split(',').map(k => k.trim());
           } else {
-            // Auto-fetch PKs when --from-table is used
             const pkSet = await conn.primaryKeys(opts._fromTable, opts._fromSchema);
             keys = [...pkSet];
             if (keys.length === 0) {
@@ -680,25 +696,10 @@ program
         const result = await conn.query(sql);
         const batch  = parseInt(opts.batch, 10) || 100;
 
-        if (opts.format === 'upsert') {
-          upContent = toMerge(result, { table: targetTable, keys, batch, dialect: conn.dbType });
-        } else {
-          upContent = toInsert(result, { table: targetTable, batch });
-        }
-
-        // Prompt for optional DELETE rollback
-        const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-        const answer = await new Promise(resolve =>
-          rl.question(
-            chalk.cyan(`Generate DELETE FROM ${targetTable} rollback in .down.sql? [y/N] `),
-            resolve
-          )
-        );
-        rl.close();
-
-        if (answer.trim().toLowerCase() === 'y') {
-          downContent = `DELETE FROM ${targetTable};\n`;
-        }
+        upContent   = opts.format === 'upsert'
+          ? toMerge(result, { table: targetTable, keys, batch, dialect: conn.dbType })
+          : toInsert(result, { table: targetTable, batch });
+        downContent = `DELETE FROM ${targetTable};\n`;
       } finally {
         await conn.disconnect().catch(() => {});
       }

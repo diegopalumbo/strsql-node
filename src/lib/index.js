@@ -9,7 +9,7 @@ const { Pipe, PipeResult, generateDDL }      = require('./pipe');
 const { listDrivers, getDriver, DRIVERS }    = require('./drivers');
 const { Dialect }                            = require('./dialect');
 const { runMigrations }                      = require('./migrations/migrationRunner');
-const { runSeeds }                           = require('./migrations/seedRunner');
+const { runSeeds, runSeedsUp, runSeedsDown } = require('./migrations/seedRunner');
 const { createMigration, createSeed }        = require('./migrations/create');
 
 module.exports = {
@@ -38,6 +38,8 @@ module.exports = {
   Dialect,
   runMigrations,
   runSeeds,
+  runSeedsUp,
+  runSeedsDown,
   createMigration,
   createSeed,
 };

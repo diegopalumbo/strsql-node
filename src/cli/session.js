@@ -375,6 +375,8 @@ class STRSQLSession {
             case '--ssl':      pfCfg.sslMode       = pfArgs[++i]; break;
             case '--naming':   pfCfg.namingMode    = pfArgs[++i]; break;
             case '--library-list': case '--libl': pfCfg.libraryList = pfArgs[++i]; break;
+            case '--migration-table': pfCfg.migrationTable = pfArgs[++i]; break;
+            case '--seed-table':      pfCfg.seedTable      = pfArgs[++i]; break;
           }
         }
         if (!pfCfg.type) pfCfg.type = 'ibmi';
@@ -1083,6 +1085,299 @@ class STRSQLSession {
         break;
       }
 
+      // ── \migrations run|create ───────────────────────────────────────────────
+      case 'migrations': {
+        const [mgSubcmd, ...mgArgs] = args;
+        if (!mgSubcmd || (mgSubcmd !== 'run' && mgSubcmd !== 'create')) {
+          console.error(chalk.red(
+            'Usage: \\migrations run <path> [up|down] [--migration-table <name>]\n' +
+            '       \\migrations create <path> <name> [--from-table [SCHEMA.]TABLE]'
+          ));
+          break;
+        }
+
+        if (mgSubcmd === 'run') {
+          if (!this.conn?.isConnected()) {
+            console.error(chalk.red('Not connected. Use \\connect or \\profile first.'));
+            break;
+          }
+          if (mgArgs.length === 0) {
+            console.error(chalk.red('Usage: \\migrations run <path> [up|down] [--migration-table <name>]'));
+            break;
+          }
+
+          let migrationsPath = null;
+          let migrateAction  = 'up';
+          let migrationTable = null;
+          for (let i = 0; i < mgArgs.length; i++) {
+            if (mgArgs[i] === '--migration-table' && mgArgs[i + 1]) {
+              migrationTable = mgArgs[++i];
+            } else if (mgArgs[i] === 'up' || mgArgs[i] === 'down') {
+              migrateAction = mgArgs[i];
+            } else if (!mgArgs[i].startsWith('--')) {
+              migrationsPath = mgArgs[i];
+            }
+          }
+          if (!migrationsPath) {
+            console.error(chalk.red('Specify the migrations directory path.'));
+            break;
+          }
+
+          const mTable  = migrationTable || this.conn.config.migrationTable || 'MIGRATION_LOG';
+          const mSchema = this.conn.config.defaultSchema || '';
+          const mPath   = path.resolve(migrationsPath);
+
+          if (!fs.existsSync(mPath)) {
+            console.error(chalk.red(`Directory not found: ${mPath}`));
+            break;
+          }
+
+          const { runUp: _mUp, runDown: _mDown } = require('../lib/migrations/migrate');
+          this.rl.pause();
+          try {
+            if (migrateAction === 'up') {
+              await _mUp(this.conn, mPath, mTable, mSchema);
+            } else {
+              await _mDown(this.conn, mPath, mTable, mSchema);
+            }
+          } catch (err) {
+            console.error(chalk.red(`Migration error: ${err.message}`));
+            if (err.odbcErrors) {
+              for (const e of err.odbcErrors) {
+                console.error(chalk.dim(`  [${e.state}] ${e.message}`));
+              }
+            }
+          } finally {
+            this.rl.resume();
+          }
+        }
+
+        if (mgSubcmd === 'create') {
+          let mcPath      = null;
+          let mcName      = null;
+          let mcFromTable = null;
+          for (let i = 0; i < mgArgs.length; i++) {
+            if (mgArgs[i] === '--from-table' && mgArgs[i + 1]) {
+              mcFromTable = mgArgs[++i];
+            } else if (!mgArgs[i].startsWith('--')) {
+              if (!mcPath)      mcPath = mgArgs[i];
+              else if (!mcName) mcName = mgArgs[i];
+            }
+          }
+          if (!mcPath || !mcName) {
+            console.error(chalk.red('Usage: \\migrations create <path> <name> [--from-table [SCHEMA.]TABLE]'));
+            break;
+          }
+
+          const { createMigration: _createMig } = require('../lib/migrations/create');
+          let mcUp, mcDown;
+
+          if (mcFromTable) {
+            if (!this.conn?.isConnected()) {
+              console.error(chalk.red('Not connected. --from-table requires an active connection.'));
+              break;
+            }
+            const { generateDDL: _genDDL } = require('../lib/pipe');
+            const _mcDot   = mcFromTable.indexOf('.');
+            const mcSchema = _mcDot >= 0 ? mcFromTable.slice(0, _mcDot)  : (this.conn.config.defaultSchema || '');
+            const mcTable  = _mcDot >= 0 ? mcFromTable.slice(_mcDot + 1) : mcFromTable;
+            const mcQual   = mcSchema ? `${mcSchema}.${mcTable}` : mcTable;
+            try {
+              const descResult = await this.conn.describeTable(mcTable, mcSchema);
+              if (descResult.rows.length === 0) {
+                console.error(chalk.red(`No columns found for table ${mcQual}.`));
+                break;
+              }
+              mcUp   = _genDDL(mcQual, descResult, this.conn.dbType) + '\n';
+              mcDown = `DROP TABLE ${mcQual};\n`;
+            } catch (err) {
+              console.error(chalk.red(`Failed to fetch DDL for ${mcQual}: ${err.message}`));
+              break;
+            }
+          }
+
+          try {
+            const { upFile, downFile } = _createMig(mcName, mcPath, { upContent: mcUp, downContent: mcDown });
+            console.log(chalk.green(`Created migration files:\n  ${upFile}\n  ${downFile}`));
+          } catch (err) {
+            console.error(chalk.red(`Failed to create migration: ${err.message}`));
+          }
+        }
+        break;
+      }
+
+      // ── \seeds run|create ────────────────────────────────────────────────────
+      case 'seeds': {
+        const [sdSubcmd, ...sdArgs] = args;
+        if (!sdSubcmd || (sdSubcmd !== 'run' && sdSubcmd !== 'create')) {
+          console.error(chalk.red(
+            'Usage: \\seeds run <path> [up|down] [--seed-table <name>]\n' +
+            '       \\seeds create <path> <name> [-q <sql>] [--from-table TABLE]\n' +
+            '                    [--table T] [--format insert|upsert] [--keys cols] [--batch N]'
+          ));
+          break;
+        }
+
+        if (sdSubcmd === 'run') {
+          if (!this.conn?.isConnected()) {
+            console.error(chalk.red('Not connected. Use \\connect or \\profile first.'));
+            break;
+          }
+          if (sdArgs.length === 0) {
+            console.error(chalk.red('Usage: \\seeds run <path> [up|down] [--seed-table <name>]'));
+            break;
+          }
+
+          let seedsPath  = null;
+          let seedAction = 'up';
+          let seedTable  = null;
+          for (let i = 0; i < sdArgs.length; i++) {
+            if (sdArgs[i] === '--seed-table' && sdArgs[i + 1]) {
+              seedTable = sdArgs[++i];
+            } else if (sdArgs[i] === 'up' || sdArgs[i] === 'down') {
+              seedAction = sdArgs[i];
+            } else if (!sdArgs[i].startsWith('--')) {
+              seedsPath = sdArgs[i];
+            }
+          }
+          if (!seedsPath) {
+            console.error(chalk.red('Specify the seeds directory path.'));
+            break;
+          }
+
+          const sTable  = seedTable || this.conn.config.seedTable || 'SEED_LOG';
+          const sSchema = this.conn.config.defaultSchema || '';
+          const sPath   = path.resolve(seedsPath);
+
+          if (!fs.existsSync(sPath)) {
+            console.error(chalk.red(`Directory not found: ${sPath}`));
+            break;
+          }
+
+          const { runSeedsUp: _sUp, runSeedsDown: _sDown } = require('../lib/migrations/seedRunner');
+          this.rl.pause();
+          try {
+            if (seedAction === 'up') {
+              await _sUp(this.conn, sPath, sTable, sSchema);
+            } else {
+              await _sDown(this.conn, sPath, sTable, sSchema);
+            }
+          } catch (err) {
+            console.error(chalk.red(`Seed error: ${err.message}`));
+            if (err.odbcErrors) {
+              for (const e of err.odbcErrors) {
+                console.error(chalk.dim(`  [${e.state}] ${e.message}`));
+              }
+            }
+          } finally {
+            this.rl.resume();
+          }
+        }
+
+        if (sdSubcmd === 'create') {
+          let scPath      = null;
+          let scName      = null;
+          let scQuery     = null;
+          let scFromTable = null;
+          let scTable     = null;
+          let scFormat    = 'insert';
+          let scKeys      = null;
+          let scBatch     = 100;
+          for (let i = 0; i < sdArgs.length; i++) {
+            switch (sdArgs[i]) {
+              case '-q': case '--query':  scQuery     = sdArgs[++i]; break;
+              case '--from-table':        scFromTable = sdArgs[++i]; break;
+              case '--table':             scTable     = sdArgs[++i]; break;
+              case '--format':            scFormat    = sdArgs[++i]; break;
+              case '--keys':              scKeys      = sdArgs[++i]; break;
+              case '-b': case '--batch':  scBatch     = parseInt(sdArgs[++i], 10) || 100; break;
+              default:
+                if (!sdArgs[i].startsWith('--')) {
+                  if (!scPath)      scPath = sdArgs[i];
+                  else if (!scName) scName = sdArgs[i];
+                }
+            }
+          }
+          if (!scPath || !scName) {
+            console.error(chalk.red(
+              'Usage: \\seeds create <path> <name> [-q <sql>] [--from-table TABLE]\n' +
+              '                    [--table T] [--format insert|upsert] [--keys cols] [--batch N]'
+            ));
+            break;
+          }
+          if (scFormat === 'upsert' && !scFromTable && !scKeys) {
+            console.error(chalk.red('--keys is required with --format upsert and -q.'));
+            break;
+          }
+          if (scQuery && !scFromTable && !scTable) {
+            console.error(chalk.red('--table is required with -q.'));
+            break;
+          }
+
+          const { createSeed: _createSeed }            = require('../lib/migrations/create');
+          const { toInsert: _toIns, toMerge: _toMrg } = require('../lib/formatter');
+          let scUp, scDown;
+
+          if (scQuery || scFromTable) {
+            if (!this.conn?.isConnected()) {
+              console.error(chalk.red('Not connected. Use \\connect or \\profile first.'));
+              break;
+            }
+
+            let sql, targetTable, keys = [];
+
+            if (scFromTable) {
+              const _scDot   = scFromTable.indexOf('.');
+              const scSchema = _scDot >= 0 ? scFromTable.slice(0, _scDot)  : (this.conn.config.defaultSchema || '');
+              const scTbl    = _scDot >= 0 ? scFromTable.slice(_scDot + 1) : scFromTable;
+              const scQual   = scSchema ? `${scSchema}.${scTbl}` : scTbl;
+              sql         = `SELECT * FROM ${scQual}`;
+              targetTable = scTable || scQual;
+
+              if (scFormat === 'upsert' && !scKeys) {
+                try {
+                  const pkSet = await this.conn.primaryKeys(scTbl, scSchema);
+                  keys = [...pkSet];
+                  if (keys.length === 0) {
+                    console.error(chalk.red(`No primary key found for ${scQual}. Use --keys.`));
+                    break;
+                  }
+                } catch (err) {
+                  console.error(chalk.red(`Failed to fetch PKs for ${scQual}: ${err.message}`));
+                  break;
+                }
+              }
+            } else {
+              sql         = scQuery;
+              targetTable = scTable;
+            }
+
+            if (scKeys) keys = scKeys.split(',').map(k => k.trim());
+
+            let queryResult;
+            try {
+              queryResult = await this.conn.query(sql);
+            } catch (err) {
+              console.error(chalk.red(`Query failed: ${err.message}`));
+              break;
+            }
+
+            scUp   = scFormat === 'upsert'
+              ? _toMrg(queryResult, { table: targetTable, keys, batch: scBatch, dialect: this.conn.dbType })
+              : _toIns(queryResult, { table: targetTable, batch: scBatch });
+            scDown = `DELETE FROM ${targetTable};\n`;
+          }
+
+          try {
+            const { upFile, downFile } = _createSeed(scName, scPath, { upContent: scUp, downContent: scDown });
+            console.log(chalk.green(`Created seed files:\n  ${upFile}\n  ${downFile}`));
+          } catch (err) {
+            console.error(chalk.red(`Failed to create seed: ${err.message}`));
+          }
+        }
+        break;
+      }
+
       default:
         console.error(chalk.red(`Unknown command: \\${verb}. Type \\help for help.`));
     }
@@ -1258,6 +1553,7 @@ class STRSQLSession {
       '\\export', '\\import', '\\pipe', '\\ddl', '\\run',
       '\\drivers', '\\history', '\\hsearch', '\\status', '\\clear',
       '\\pager', '\\nopager', '\\pagerstatus', '\\cmd',
+      '\\migrations', '\\seeds',
     ];
 
     if (line.trimStart().startsWith('\\') && !line.trimStart().includes(' ')) {
@@ -1356,6 +1652,15 @@ ${chalk.bold('SQL Editor')}
   ${s('\\edit')} ${d('[file.sql]')}                       Open SQL in \\$EDITOR; executes on save & close
   ${s('\\e')} ${d('[file.sql]')}                          Alias for \\edit
   ${d('Set $VISUAL or $EDITOR to choose your editor (e.g. EDITOR=nano or VISUAL=code --wait)')}
+
+${chalk.bold('Migrations & Seeds')}
+  ${s('\\migrations run')}  <path> ${d('[up|down] [--migration-table <name>]')}   Run migrations on current connection
+  ${s('\\migrations create')} <path> <name> ${d('[--from-table [SCHEMA.]TABLE]')}  Create migration file pair
+  ${s('\\seeds run')}      <path> ${d('[up|down] [--seed-table <name>]')}            Run seeds on current connection
+  ${s('\\seeds create')}   <path> <name> ${d('[-q <sql>] [--from-table TABLE]')}      Create seed file pair
+  ${d('  [--table T] [--format insert|upsert] [--keys cols] [--batch N]')}
+  ${d('Tracking tables default to MIGRATION_LOG / SEED_LOG')}
+  ${d('Override per-session with --migration-table / --seed-table, or permanently in the profile')}
 
 ${chalk.bold('Other')}
   ${s('\\drivers')}                                 List supported DB types

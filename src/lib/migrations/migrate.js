@@ -21,7 +21,8 @@ async function ensureMigrationTable(conn, migrationTable, schema) {
   } catch (err) {
     // Ignore "table already exists" errors across all DB types.
     const msg = String(err.message || '');
-    if (!/already exists|duplicate|42S01|42710|object.*already/i.test(msg)) throw err;
+    const odbcMsg = (err.odbcErrors || []).map(e => `${e.state} ${e.message}`).join(' ');
+    if (!/already exists|duplicate|42S01|42710|SQL0601|object.*already/i.test(msg + ' ' + odbcMsg)) throw err;
     console.log(`🟡 ${qname} already exists.`);
   }
 }

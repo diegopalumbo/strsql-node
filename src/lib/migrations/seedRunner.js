@@ -20,7 +20,8 @@ async function ensureSeedTable(conn, seedTable, schema) {
     console.log(`🆕 Created table ${qname}.`);
   } catch (err) {
     const msg = String(err.message || '');
-    if (!/already exists|duplicate|42S01|42710|object.*already/i.test(msg)) throw err;
+    const odbcMsg = (err.odbcErrors || []).map(e => `${e.state} ${e.message}`).join(' ');
+    if (!/already exists|duplicate|42S01|42710|SQL0601|object.*already/i.test(msg + ' ' + odbcMsg)) throw err;
     console.log(`🟡 ${qname} already exists.`);
   }
 }
@@ -60,7 +61,51 @@ async function rollbackSeed(conn, seedsPath, seedTable, schema, file) {
 }
 
 /**
- * Run seeds against the specified database.
+ * Apply all pending seeds against an already-open connection.
+ *
+ * @param {object} conn       Open connection object.
+ * @param {string} seedsPath  Absolute path to the seeds directory.
+ * @param {string} seedTable  Tracking table name (e.g. 'SEED_LOG').
+ * @param {string} schema     Schema that qualifies the tracking table (may be '').
+ */
+async function runSeedsUp(conn, seedsPath, seedTable, schema) {
+  await ensureSeedTable(conn, seedTable, schema);
+  const applied = await getAppliedSeeds(conn, seedTable, schema);
+  const files = fs.readdirSync(seedsPath)
+    .filter(f => f.endsWith('.up.sql'))
+    .sort();
+  for (const file of files) {
+    if (!applied.includes(file)) {
+      console.log(`🌱 Applying seed: ${file}`);
+      await applySeed(conn, seedsPath, seedTable, schema, file);
+    } else {
+      console.log(`🟡 Already applied: ${file}`);
+    }
+  }
+}
+
+/**
+ * Roll back the last applied seed against an already-open connection.
+ *
+ * @param {object} conn       Open connection object.
+ * @param {string} seedsPath  Absolute path to the seeds directory.
+ * @param {string} seedTable  Tracking table name (e.g. 'SEED_LOG').
+ * @param {string} schema     Schema that qualifies the tracking table (may be '').
+ */
+async function runSeedsDown(conn, seedsPath, seedTable, schema) {
+  await ensureSeedTable(conn, seedTable, schema);
+  const applied = await getAppliedSeeds(conn, seedTable, schema);
+  if (applied.length === 0) {
+    console.log('ℹ️  No seed to rollback.');
+    return;
+  }
+  const last = applied[applied.length - 1];
+  console.log(`🔁 Rolling back seed: ${last}`);
+  await rollbackSeed(conn, seedsPath, seedTable, schema, last);
+}
+
+/**
+ * Run seeds against the specified database (high-level: manages connect/disconnect).
  *
  * @param {string} action  'up' | 'down'
  * @param {object} opts
@@ -76,33 +121,14 @@ async function runSeeds(action, { config, seedsPath, seedTable = 'SEED_LOG', sch
   const conn = createConnection(config);
   try {
     await conn.connect();
-    await ensureSeedTable(conn, seedTable, schema);
-    const applied = await getAppliedSeeds(conn, seedTable, schema);
-
     if (action === 'up') {
-      const files = fs.readdirSync(seedsPath)
-        .filter(f => f.endsWith('.up.sql'))
-        .sort();
-      for (const file of files) {
-        if (!applied.includes(file)) {
-          console.log(`🌱 Applying seed: ${file}`);
-          await applySeed(conn, seedsPath, seedTable, schema, file);
-        } else {
-          console.log(`🟡 Already applied: ${file}`);
-        }
-      }
+      await runSeedsUp(conn, seedsPath, seedTable, schema);
     } else {
-      if (applied.length === 0) {
-        console.log('ℹ️  No seed to rollback.');
-      } else {
-        const last = applied[applied.length - 1];
-        console.log(`🔁 Rolling back seed: ${last}`);
-        await rollbackSeed(conn, seedsPath, seedTable, schema, last);
-      }
+      await runSeedsDown(conn, seedsPath, seedTable, schema);
     }
   } finally {
     await conn.disconnect().catch(() => {});
   }
 }
 
-module.exports = { runSeeds };
+module.exports = { runSeeds, runSeedsUp, runSeedsDown };
