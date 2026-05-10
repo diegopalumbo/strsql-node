@@ -18,7 +18,7 @@
 | **Import** | Load `.csv`, `.json`, or `.sql` files into any supported database, with column mapping, batch size control, dry-run, and skip-on-error modes |
 | **Dialect engine** | Handles identifier quoting, value literals, upsert strategy, pagination syntax, and DDL type mapping per database |
 | **Connection profiles** | Named profiles stored in `~/.strsql-node/profiles.json` for quick multi-environment switching |
-| **Migrations & Seeds** | Versioned SQL migrations and data seeds: `up`/`down` file pairs, a DB tracking table, `migrate` and `seed` CLI commands, and scaffolding helpers (`migration:create`, `seed:create`) with optional DDL/data pre-population from an existing table |
+| **Migrations & Seeds** | Versioned SQL migrations and data seeds: `up`/`down` file pairs, a DB tracking table, `migrations run`/`seeds run` CLI commands, and scaffolding helpers (`migrations create`, `seeds create`) with optional DDL/data pre-population from an existing table |
 | **Programmatic API** | `ODBCConnection`, `Importer`, `Pipe`, `Dialect`, formatter functions, and migration/seed runners fully usable as a Node.js library |
 
 ---
@@ -46,10 +46,10 @@
   - [Migrations & Seeds (session)](#migrations--seeds-session)
 - [CLI subcommands](#cli-subcommands)
 - [Migrations & Seeds](#migrations--seeds)
-  - [`migrate`](#strsql-migrate-path-action)
-  - [`seed`](#strsql-seed-path-action)
-  - [`migration:create`](#strsql-migrationcreate-path-name)
-  - [`seed:create`](#strsql-seedcreate-path-name)
+  - [`migrations run`](#strsql-migrations-run-path-action)
+  - [`migrations create`](#strsql-migrations-create-path-name)
+  - [`seeds run`](#strsql-seeds-run-path-action)
+  - [`seeds create`](#strsql-seeds-create-path-name)
 - [Programmatic API](#programmatic-api)
   - [ODBCConnection](#odbcconnection)
   - [Importer](#importer)
@@ -522,11 +522,69 @@ export VISUAL="cursor --wait"       # Cursor
 
 Run migrations and seeds against the currently connected database without leaving the REPL.
 
+#### `\migrations run`
+
+Apply all pending `.up.sql` files in the given directory (default action: `up`), or roll back the last applied migration (`down`). The tracking table defaults to `MIGRATION_LOG` but can be overridden per command or stored in the active profile.
+
 ```
 \migrations run <path> [up|down] [--migration-table <name>]
+```
+
+```
+\migrations run ./migrations
+\migrations run ./migrations up
+\migrations run ./migrations down
+\migrations run ./migrations --migration-table MYLIB.MIGRATION_LOG
+```
+
+#### `\migrations create`
+
+Scaffold a timestamped migration file pair (`YYYYMMDDHHMMSS_<name>.up.sql` / `.down.sql`). Add `--from-table` to pre-populate the `.up.sql` with `CREATE TABLE` DDL from the currently connected database, and `.down.sql` with `DROP TABLE`.
+
+```
 \migrations create <path> <name> [--from-table [SCHEMA.]TABLE]
+```
+
+```
+\migrations create ./migrations add_orders_index
+\migrations create ./migrations create_orders --from-table MYLIB.ORDERS
+```
+
+#### `\seeds run`
+
+Apply all pending `.up.sql` seed files in the given directory (`up`), or roll back the last applied seed (`down`). The tracking table defaults to `SEED_LOG`.
+
+```
 \seeds run <path> [up|down] [--seed-table <name>]
+```
+
+```
+\seeds run ./seeds
+\seeds run ./seeds up
+\seeds run ./seeds down
+\seeds run ./seeds --seed-table MYLIB.SEED_LOG
+```
+
+#### `\seeds create`
+
+Scaffold a timestamped seed file pair. With `--from-table` or `-q` the `.up.sql` is pre-populated with `INSERT` (or `MERGE`/upsert) statements generated from live data. Primary keys are auto-detected when `--format upsert` is used with `--from-table`.
+
+```
 \seeds create <path> <name> [-q <sql>] [--from-table TABLE] [--table T] [--format insert|upsert] [--keys cols] [--batch N]
+```
+
+```
+# Empty scaffolding
+\seeds create ./seeds initial_data
+
+# INSERT from a live table (all rows)
+\seeds create ./seeds orders_2024 --from-table MYLIB.ORDERS
+
+# UPSERT from a live table — PKs detected automatically
+\seeds create ./seeds products --from-table MYLIB.PRODUCTS --format upsert
+
+# UPSERT from a custom query with explicit keys
+\seeds create ./seeds active_customers -q "SELECT * FROM MYLIB.CUSTOMERS WHERE ACTIVE=1" --table MYLIB.CUSTOMERS --format upsert --keys CUSNUM
 ```
 
 | Command | Description |
@@ -536,8 +594,10 @@ Run migrations and seeds against the currently connected database without leavin
 | `\seeds run <path> [up\|down]` | Apply all pending seeds (`up`) or roll back the last one (`down`) |
 | `\seeds create <path> <name>` | Scaffold a seed file pair; supports `--from-table`, `-q`, `--format upsert`, etc. |
 
-Options for `\migrations run` / `\seeds run`:
+Options for `\migrations run`:
 - `--migration-table <name>` — tracking table (default: `MIGRATION_LOG`; also read from the active profile)
+
+Options for `\seeds run`:
 - `--seed-table <name>` — tracking table (default: `SEED_LOG`; also read from the active profile)
 
 Options for `\seeds create`:
@@ -545,7 +605,7 @@ Options for `\seeds create`:
 - `--from-table <TABLE>` — use `SELECT * FROM <TABLE>` as the source query
 - `--table <T>` — target table for `INSERT`/`UPSERT` (required with `-q`)
 - `--format insert|upsert` — output format (default: `insert`)
-- `--keys <cols>` — key columns for upsert, comma-separated
+- `--keys <cols>` — key columns for upsert, comma-separated (required with `-q --format upsert`)
 - `-b, --batch <N>` — rows per INSERT statement (default: `100`)
 
 ---
@@ -557,10 +617,10 @@ strsql [session]              Interactive REPL (default)
 strsql run [sql]              Execute a single SQL statement
 strsql import <file>          Import a file into a database
 strsql pipe                   Transfer rows between two databases
-strsql migrate <path> [up|down]       Run database migrations
-strsql seed <path> [up|down]          Run database seeds
-strsql migration:create <path> <name> Scaffold a migration file pair
-strsql seed:create <path> <name>      Scaffold a seed file pair
+strsql migrations run <path> [up|down]    Run database migrations
+strsql migrations create <path> <name>   Scaffold a migration file pair
+strsql seeds run <path> [up|down]         Run database seeds
+strsql seeds create <path> <name>         Scaffold a seed file pair
 strsql profiles list          List saved profiles
 strsql profiles add           Add/update a profile
 strsql profiles remove        Delete a profile
@@ -625,15 +685,15 @@ strsql drivers                List supported database types
 
 Migrations and seeds follow the same file-pair convention: each logical change is represented by a `.up.sql` file (forward) and a `.down.sql` file (rollback). Applied files are recorded in a tracking table (`MIGRATION_LOG` / `SEED_LOG`) so subsequent runs only apply what's new.
 
-### `strsql migrate <path> [action]`
+### `strsql migrations run <path> [action]`
 
 Run all pending `.up.sql` files in `<path>` (action `up`, default), or roll back the last applied migration (action `down`).
 
 ```bash
-strsql migrate ./migrations           --profile ibmi-prod
-strsql migrate ./migrations up        --profile ibmi-prod
-strsql migrate ./migrations down      --profile ibmi-prod
-strsql migrate ./migrations --host 10.0.0.1 -u MYUSER --password secret -s MYLIB
+strsql migrations run ./migrations           --profile ibmi-prod
+strsql migrations run ./migrations up        --profile ibmi-prod
+strsql migrations run ./migrations down      --profile ibmi-prod
+strsql migrations run ./migrations --host 10.0.0.1 -u MYUSER --password secret -s MYLIB
 ```
 
 | Option | Description |
@@ -644,14 +704,14 @@ strsql migrate ./migrations --host 10.0.0.1 -u MYUSER --password secret -s MYLIB
 | `--adapter <adapter>` | `odbc` \| `idb` (IBM i only) |
 | `--migration-table <name>` | Tracking table (default: `MIGRATION_LOG`) |
 
-### `strsql seed <path> [action]`
+### `strsql seeds run <path> [action]`
 
 Run all pending `.up.sql` seed files in `<path>` (`up`), or roll back the last applied seed (`down`).
 
 ```bash
-strsql seed ./seeds           --profile ibmi-prod
-strsql seed ./seeds up        --profile ibmi-prod
-strsql seed ./seeds down      --profile ibmi-prod
+strsql seeds run ./seeds           --profile ibmi-prod
+strsql seeds run ./seeds up        --profile ibmi-prod
+strsql seeds run ./seeds down      --profile ibmi-prod
 ```
 
 | Option | Description |
@@ -662,16 +722,16 @@ strsql seed ./seeds down      --profile ibmi-prod
 | `--adapter <adapter>` | `odbc` \| `idb` (IBM i only) |
 | `--seed-table <name>` | Tracking table (default: `SEED_LOG`) |
 
-### `strsql migration:create <path> <name>`
+### `strsql migrations create <path> <name>`
 
 Scaffold a timestamped migration file pair (`YYYYMMDDHHMMSS_<name>.up.sql` / `.down.sql`). With `--from-table` the `.up.sql` is pre-populated with `CREATE TABLE` DDL generated from the live database, and `.down.sql` with `DROP TABLE`.
 
 ```bash
 # Empty scaffolding
-strsql migration:create ./migrations add_orders_index
+strsql migrations create ./migrations add_orders_index
 
 # Pre-populated from a live table
-strsql migration:create ./migrations create_orders \
+strsql migrations create ./migrations create_orders \
   --from-table MYLIB.ORDERS --profile ibmi-prod
 ```
 
@@ -683,25 +743,25 @@ strsql migration:create ./migrations create_orders \
 | `-l, --library-list <libs>` | IBM i library list (comma-separated) |
 | `--adapter <adapter>` | `odbc` \| `idb` (IBM i only) |
 
-### `strsql seed:create <path> <name>`
+### `strsql seeds create <path> <name>`
 
 Scaffold a timestamped seed file pair. With `--from-table` or `-q` the `.up.sql` is pre-populated with `INSERT` (or `MERGE`/upsert) statements generated from live data. Primary keys are auto-detected when `--format upsert` is combined with `--from-table`. An interactive prompt offers a `DELETE FROM` rollback in `.down.sql`.
 
 ```bash
 # Empty scaffolding
-strsql seed:create ./seeds initial_data
+strsql seeds create ./seeds initial_data
 
 # INSERT from a live table (auto-selects all rows)
-strsql seed:create ./seeds orders_2024 \
+strsql seeds create ./seeds orders_2024 \
   --from-table MYLIB.ORDERS --profile ibmi-prod
 
 # UPSERT from a custom query with explicit keys
-strsql seed:create ./seeds active_customers \
+strsql seeds create ./seeds active_customers \
   -q "SELECT * FROM MYLIB.CUSTOMERS WHERE ACTIVE=1" \
   --table MYLIB.CUSTOMERS --format upsert --keys CUSNUM --profile ibmi-prod
 
 # UPSERT from a live table — PKs detected automatically
-strsql seed:create ./seeds products \
+strsql seeds create ./seeds products \
   --from-table MYLIB.PRODUCTS --format upsert --profile ibmi-prod
 ```
 
