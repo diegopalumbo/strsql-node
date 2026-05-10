@@ -55,9 +55,10 @@ const DRIVERS = {
         params: [schema.toUpperCase()],
       };
     },
-    describeSQL(schema, table) {
+    describeSQL(schema, table, opts = {}) {
+      const sysCol = opts.systemNames ? ', SYSTEM_COLUMN_NAME' : '';
       return {
-        sql: `SELECT COLUMN_NAME, DATA_TYPE, LENGTH, NUMERIC_SCALE, IS_NULLABLE, 
+        sql: `SELECT COLUMN_NAME${sysCol}, DATA_TYPE, LENGTH, NUMERIC_SCALE, IS_NULLABLE,
               COLUMN_DEFAULT,
               COALESCE(NULLIF(TRIM(COLUMN_TEXT), ''), COLUMN_HEADING) AS COLUMN_HEADING
               FROM QSYS2.SYSCOLUMNS

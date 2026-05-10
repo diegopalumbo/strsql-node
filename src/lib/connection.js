@@ -170,7 +170,7 @@ class ODBCConnection {
     return result.rows.length > 0 ? result.rows[0].TABLE_SCHEMA.trim() : '';
   }
 
-  async describeTable(table, schema) {
+  async describeTable(table, schema, opts = {}) {
     let s = schema || this.config.defaultSchema || '';
     const [schemaName, tableName] = table.includes('.')
       ? table.split('.')
@@ -180,7 +180,7 @@ class ODBCConnection {
     if (!resolvedSchema && this.config.libraryList) {
       resolvedSchema = await this._resolveSchemaFromLibl(tableName);
     }
-    const spec = this.driver.describeSQL(resolvedSchema, tableName);
+    const spec = this.driver.describeSQL(resolvedSchema, tableName, opts);
     const raw  = await this.query(spec.sql, spec.params);
     if (spec.mapRow) {
       return {

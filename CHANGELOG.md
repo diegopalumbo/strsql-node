@@ -7,7 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [1.0.16] - 2026-05-09
+## [1.0.18] - 2026-05-09
+
+### Added
+- **Migrations & Seeds** — integrated the `ibmi-db-migrations` library directly into `strsql-node`. Four new CLI subcommands are now available:
+  - **`strsql migrate <path> [up|down]`** — apply or roll back versioned SQL migrations. Migrations are stored as `.up.sql` / `.down.sql` file pairs; a `MIGRATION_LOG` table (configurable via `--migration-table`) tracks which files have been applied. On `down` the most recently applied migration is rolled back.
+  - **`strsql seed <path> [up|down]`** — apply or roll back data seeds using the same file-pair convention. Applied seeds are tracked in a `SEED_LOG` table (configurable via `--seed-table`).
+  - **`strsql migration:create <path> <name>`** — scaffold a timestamped migration file pair. Pass `--from-table SCHEMA.TABLE` to have the `.up.sql` pre-populated with the table's `CREATE TABLE` DDL (generated from the live database) and the `.down.sql` pre-populated with the corresponding `DROP TABLE`.
+  - **`strsql seed:create <path> <name>`** — scaffold a timestamped seed file pair. Pass `--from-table TABLE` (or `-q <sql>` with `--table`) to pre-populate the `.up.sql` with `INSERT` or `MERGE/UPSERT` statements generated from live data; primary keys are auto-detected when `--format upsert` is used with `--from-table`. An interactive prompt offers to generate a `DELETE FROM` rollback in the `.down.sql`.
+- **Programmatic API** — `runMigrations`, `runSeeds`, `createMigration`, and `createSeed` are now exported from `strsql-node`'s public API (`src/lib/index.js`).
+- **`src/lib/migrations/` module** — new internal module containing `migrate.js` (low-level migration helpers), `migrationRunner.js`, `seedRunner.js`, and `create.js`.
+- All migration/seed commands honour the full connection option set (`--profile`, `--host`, `--user`, `--password`, `--schema`, `--library-list`, `--adapter`) consistent with other `strsql` subcommands.
+- **Interactive session — `\migrations` and `\seeds`** — the same migration and seed operations are now available inside an active `strsql` session without leaving the REPL:
+  - **`\migrations run <path> [up|down] [--migration-table <name>]`** — apply or roll back migrations against the currently connected database.
+  - **`\migrations create <path> <name> [--from-table [SCHEMA.]TABLE]`** — scaffold a timestamped migration file pair; `--from-table` generates DDL from the live connection.
+  - **`\seeds run <path> [up|down] [--seed-table <name>]`** — apply or roll back seeds.
+  - **`\seeds create <path> <name> [-q <sql>] [--from-table TABLE] [--table T] [--format insert|upsert] [--keys cols] [--batch N]`** — scaffold a seed file pair, optionally pre-populated from live data.
+- **`\saveprofile` / profiles** — two new options: `--migration-table <name>` and `--seed-table <name>` can now be stored in a named profile and will be used as defaults by `\migrations run` and `\seeds run`.
+
+---
+
+## [1.0.17] - 2026-05-09
 
 ### Added
 - **`\sysnames [on|off]`** — session toggle to display DDS system column names (≤10 chars) instead of SQL column names in SELECT results and `\describe` output. When enabled, `_applySystemNames()` queries `QSYS2.SYSCOLUMNS` for the first table found in the `FROM` clause and remaps headers accordingly. If the names are identical (already ≤10 chars) no change is applied. Silently ignored on non-IBM i databases.
