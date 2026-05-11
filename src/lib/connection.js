@@ -1,7 +1,24 @@
 'use strict';
 
-const odbc      = require('odbc');
 const { getDriver } = require('./drivers');
+const { Db2iIdbConnection } = require('./idbConnection');
+
+function wantsIdbAdapter(config = {}) {
+  const adapter = String(config.adapter || config.driver || '').toLowerCase();
+  return (config.type || 'ibmi').toLowerCase() === 'ibmi' &&
+    ['idb', 'idb-connector', 'native'].includes(adapter);
+}
+
+function loadOdbc() {
+  try {
+    return require('odbc');
+  } catch (err) {
+    err.message =
+      'Cannot load odbc. Install the odbc package and required ODBC driver, ' +
+      'or use IBM i native adapter=idb on IBM i/PASE. Original error: ' + err.message;
+    throw err;
+  }
+}
 
 function parseLibraryList(libs) {
   if (!libs) return [];
@@ -43,6 +60,9 @@ function parseLibraryList(libs) {
  */
 class ODBCConnection {
   constructor(config) {
+    if (wantsIdbAdapter(config)) {
+      return new Db2iIdbConnection(config);
+    }
     this.config    = config;
     this.type      = (config.type || 'ibmi').toLowerCase();
     this.driver    = getDriver(this.type);
@@ -56,6 +76,7 @@ class ODBCConnection {
 
   async connect() {
     const connStr = this.buildConnectionString();
+    const odbc = loadOdbc();
     this.conn      = await odbc.connect(connStr);
     this.connected = true;
 
@@ -149,7 +170,7 @@ class ODBCConnection {
     return result.rows.length > 0 ? result.rows[0].TABLE_SCHEMA.trim() : '';
   }
 
-  async describeTable(table, schema) {
+  async describeTable(table, schema, opts = {}) {
     let s = schema || this.config.defaultSchema || '';
     const [schemaName, tableName] = table.includes('.')
       ? table.split('.')
@@ -159,7 +180,7 @@ class ODBCConnection {
     if (!resolvedSchema && this.config.libraryList) {
       resolvedSchema = await this._resolveSchemaFromLibl(tableName);
     }
-    const spec = this.driver.describeSQL(resolvedSchema, tableName);
+    const spec = this.driver.describeSQL(resolvedSchema, tableName, opts);
     const raw  = await this.query(spec.sql, spec.params);
     if (spec.mapRow) {
       return {
@@ -185,12 +206,42 @@ class ODBCConnection {
     if (!resolvedSchema && this.config.libraryList) {
       resolvedSchema = await this._resolveSchemaFromLibl(tableName);
     }
+    // For IBM i, prefer the ODBC SQLPrimaryKeys catalog function (conn.primaryKeys())
+    // which correctly handles both SQL PRIMARY KEY constraints and DDS physical file
+    // key fields — without relying on SQL catalog views that may not cover DDS objects.
+    if (this.type === 'ibmi' && typeof this.conn.primaryKeys === 'function') {
+      try {
+        const rows = await this.conn.primaryKeys(
+          null,
+          resolvedSchema || null,
+          tableName.toUpperCase()
+        );
+        if (rows && rows.length > 0) {
+          return new Set(rows.map(r => (r.COLUMN_NAME || '').toUpperCase()));
+        }
+      } catch { /* fall through to SQL approach */ }
+    }
+
     const spec = this.driver.primaryKeysSQL(resolvedSchema, tableName);
+    const _extract = (s, raw) => {
+      const rows = s.mapRow ? raw.rows.map(s.mapRow).filter(Boolean) : raw.rows;
+      return rows.map(r => (r.COLUMN_NAME || r.column_name || '').toUpperCase());
+    };
     try {
-      const raw = await this.query(spec.sql, spec.params);
-      const rows = spec.mapRow ? raw.rows.map(spec.mapRow).filter(Boolean) : raw.rows;
-      return new Set(rows.map(r => (r.COLUMN_NAME || r.column_name || '').toUpperCase()));
+      const raw  = await this.query(spec.sql, spec.params);
+      const cols = _extract(spec, raw);
+      if (cols.length === 0 && spec.fallback) {
+        const raw2 = await this.query(spec.fallback.sql, spec.fallback.params);
+        return new Set(_extract(spec.fallback, raw2));
+      }
+      return new Set(cols);
     } catch (err) {
+      if (spec.fallback) {
+        try {
+          const raw2 = await this.query(spec.fallback.sql, spec.fallback.params);
+          return new Set(_extract(spec.fallback, raw2));
+        } catch { /* fall through to warning */ }
+      }
       process.stderr.write(`[warn] primaryKeys query failed: ${err.message}\n`);
       return new Set();
     }
@@ -236,6 +287,7 @@ class ODBCConnection {
       await this.conn.close();
       this.connected = false;
       const connStr = this.buildConnectionString();
+      const odbc = loadOdbc();
       this.conn      = await odbc.connect(connStr);
       this.connected = true;
     }
@@ -257,6 +309,16 @@ class ODBCConnection {
 }
 
 // backward-compat alias — new IBMiConnection(config) still works unchanged
-const IBMiConnection = ODBCConnection;
+function IBMiConnection(config) {
+  return wantsIdbAdapter(config)
+    ? new Db2iIdbConnection(config)
+    : new ODBCConnection(config);
+}
 
-module.exports = { ODBCConnection, IBMiConnection, parseLibraryList };
+function createConnection(config) {
+  return wantsIdbAdapter(config)
+    ? new Db2iIdbConnection(config)
+    : new ODBCConnection(config);
+}
+
+module.exports = { ODBCConnection, IBMiConnection, Db2iIdbConnection, createConnection, parseLibraryList };

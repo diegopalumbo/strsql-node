@@ -1,8 +1,8 @@
 # strsql-node
 
-> Interactive SQL session emulator for Node.js via ODBC — IBM i/AS400 and beyond
+> Interactive SQL session emulator for Node.js via ODBC, with optional native Db2 for i support via `idb-connector`
 
-`strsql-node` emulates an interactive `STRSQL` session and provides a full toolkit for querying, exporting, importing, and transferring data across databases via ODBC. It ships as both a **CLI tool** and a **programmatic library**.
+`strsql-node` emulates an interactive `STRSQL` session and provides a full toolkit for querying, exporting, importing, and transferring data across databases. ODBC remains the default adapter; on IBM i/PASE you can select the native `idb-connector` adapter for Db2 for i without IBM i Access ODBC driver setup.
 
 > **⚠ Alpha software** — This package is in early alpha. Only the **IBM i** and **MySQL** ODBC drivers have been tested so far. Other supported databases (SQL Server, PostgreSQL, Oracle, DB2 LUW, SQLite) are implemented but untested — use them at your own risk and please report any issues.
 
@@ -10,7 +10,7 @@
 
 | Feature | Description |
 |---|---|
-| **Interactive REPL** | Full `STRSQL`-style session with multi-line SQL, `\commands`, TAB completion, inline history navigation, and persistent history |
+| **Interactive REPL** | Full `STRSQL`-style session with multi-line SQL, `\commands`, TAB completion, inline history navigation, persistent history, shell passthrough, and built-in SQL editor |
 | **Multi-database support** | IBM i/AS400, SQL Server, PostgreSQL, MySQL/MariaDB, Oracle, DB2 LUW, SQLite — each with native catalog, pagination, and dialect support |
 | **Single-query CLI** | Run any SQL non-interactively and get output as table, CSV, JSON, INSERT, or MERGE/upsert statements |
 | **DB-to-DB Pipe** | Stream rows directly between two database connections (same or different engines) with DDL auto-generation, merge/upsert, column mapping, and no intermediate files |
@@ -18,7 +18,8 @@
 | **Import** | Load `.csv`, `.json`, or `.sql` files into any supported database, with column mapping, batch size control, dry-run, and skip-on-error modes |
 | **Dialect engine** | Handles identifier quoting, value literals, upsert strategy, pagination syntax, and DDL type mapping per database |
 | **Connection profiles** | Named profiles stored in `~/.strsql-node/profiles.json` for quick multi-environment switching |
-| **Programmatic API** | `ODBCConnection`, `Importer`, `Pipe`, `Dialect`, and formatter functions fully usable as a Node.js library |
+| **Migrations & Seeds** | Versioned SQL migrations and data seeds: `up`/`down` file pairs, a DB tracking table, `migrations run`/`seeds run` CLI commands, and scaffolding helpers (`migrations create`, `seeds create`) with optional DDL/data pre-population from an existing table |
+| **Programmatic API** | `ODBCConnection`, `Importer`, `Pipe`, `Dialect`, formatter functions, and migration/seed runners fully usable as a Node.js library |
 
 ---
 
@@ -40,7 +41,15 @@
   - [DB2 → DB2 Pipe](#db2--db2-pipe)
   - [DDL generation](#ddl-generation)
   - [History](#history)
+  - [Shell commands](#shell-commands)
+  - [SQL editor](#sql-editor)
+  - [Migrations & Seeds (session)](#migrations--seeds-session)
 - [CLI subcommands](#cli-subcommands)
+- [Migrations & Seeds](#migrations--seeds)
+  - [`migrations run`](#strsql-migrations-run-path-action)
+  - [`migrations create`](#strsql-migrations-create-path-name)
+  - [`seeds run`](#strsql-seeds-run-path-action)
+  - [`seeds create`](#strsql-seeds-create-path-name)
 - [Programmatic API](#programmatic-api)
   - [ODBCConnection](#odbcconnection)
   - [Importer](#importer)
@@ -57,9 +66,9 @@
 
 ## Supported databases
 
-| `--type` | Database | ODBC Driver |
+| `--type` | Database | Default adapter / driver |
 |---|---|---|
-| `ibmi` *(default)* | IBM i / AS400 / DB2 for i | IBM i Access ODBC Driver |
+| `ibmi` *(default)* | IBM i / AS400 / Db2 for i | `odbc` with IBM i Access ODBC Driver, or `idb` on IBM i/PASE |
 | `sqlserver` | Microsoft SQL Server | ODBC Driver 17 or 18 for SQL Server |
 | `postgresql` | PostgreSQL | PostgreSQL Unicode (psqlODBC) |
 | `mysql` | MySQL / MariaDB | MySQL Connector/ODBC 8.x or 9.x |
@@ -67,7 +76,27 @@
 | `db2` | DB2 LUW (Linux/Windows/AIX) | IBM DB2 ODBC DRIVER |
 | `sqlite` | SQLite | SQLite3 ODBC Driver |
 
-Each driver knows the correct ODBC connection string format, catalog queries, pagination syntax, literal formatting, upsert strategy, and DDL type mapping for its target database.
+Each driver knows the correct connection format, catalog queries, pagination syntax, literal formatting, upsert strategy, and DDL type mapping for its target database.
+
+### IBM i adapters
+
+`ibmi` supports two adapters:
+
+| Adapter | Where it runs | Notes |
+|---|---|---|
+| `odbc` *(default)* | Any supported Node.js host with an ODBC driver | Uses the existing IBM i Access ODBC connection path |
+| `idb` | IBM i/PASE only | Uses IBM's native `idb-connector`; no IBM i Access ODBC driver, unixODBC, or DSN setup |
+
+Examples:
+
+```bash
+strsql profiles add ibmi-odbc --type ibmi --adapter odbc --host 10.0.0.1 -u MYUSER --password secret -s MYLIB
+strsql profiles add ibmi-local --type ibmi --adapter idb --host '*LOCAL' -s MYLIB -l MYLIB,QGPL
+strsql --profile ibmi-local
+strsql --adapter idb --host '*LOCAL' -s MYLIB
+```
+
+`idb-connector` is an optional dependency because it installs and runs only on IBM i systems.
 
 > **Driver name mismatch?** If the installed ODBC driver has a different version name than the default (e.g. `MySQL ODBC 9.6 Unicode Driver` instead of `8.0`), add `--driver-name` when saving the profile or set `"driverName"` in `~/.strsql-node/profiles.json`.
 
@@ -137,6 +166,7 @@ Note: make sure you are logged in with `npm login` and have publish rights on `s
 | Variable | Description |
 |---|---|
 | `STRSQL_HOST` | Hostname / IP (or file path for SQLite) |
+| `STRSQL_ADAPTER` | Connection adapter: `odbc` or `idb` for IBM i |
 | `STRSQL_USER` | Username |
 | `STRSQL_PASSWORD` | Password |
 | `STRSQL_SCHEMA` | Default schema / library |
@@ -190,9 +220,11 @@ strsql --type sqlserver --host ss.local -u sa --password s3c --database MyDB
 ```bash
 # Table output (default)
 strsql run "SELECT * FROM MYLIB.ORDERS FETCH FIRST 10 ROWS ONLY" --profile ibmi-prod
+strsql run -q "SELECT * FROM MYLIB.ORDERS FETCH FIRST 10 ROWS ONLY" --profile ibmi-prod
 
 # Different formats
 strsql run "SELECT * FROM MYLIB.ORDERS" --format csv
+strsql run -q "SELECT * FROM MYLIB.ORDERS" --format csv
 strsql run "SELECT * FROM MYLIB.ORDERS" --format json  --out orders.json
 strsql run "SELECT * FROM MYLIB.ORDERS" --format insert --table MYLIB.ORDERS_COPY
 strsql run "SELECT * FROM MYLIB.ORDERS" --format merge  --table MYLIB.ORDERS_COPY --keys ORDNUM
@@ -260,6 +292,8 @@ Additional options for `\saveprofile`:
 - `--ssl` — PostgreSQL SSL mode (`disable` / `require` / `verify-ca` / `verify-full`)
 - `--naming sql|system` — IBM i naming mode
 - `--library-list LIB1,LIB2,...` — IBM i library list (alias: `--libl`)
+- `--migration-table <name>` — default tracking table for `\migrations run` (stored in profile)
+- `--seed-table <name>` — default tracking table for `\seeds run` (stored in profile)
 
 ### Schema & objects
 
@@ -268,7 +302,8 @@ Additional options for `\saveprofile`:
 | `\schema [name]` | Show or set default schema |
 | `\libl [LIB1,LIB2,...]` | Show or set IBM i library list |
 | `\tables [schema]` | List tables (uses native catalog per DB) |
-| `\describe [schema.]TABLE` | Describe table columns |
+| `\describe [schema.]TABLE [--system-names]` | Describe table columns |
+| `\sysnames [on\|off]` | Toggle DDS system names for the session |
 
 The `\libl` command replaces the user portion of the IBM i job library list via `CHGLIBL` and `QSYS2.QCMDEXC`. Without arguments it displays the configured user library list and current library.
 
@@ -281,7 +316,21 @@ SQL> \libl DIEGOPAL1,DIEGOPAL
 Square brackets in command descriptions mean “optional argument”; they are not part of the value to type.
 
 On IBM i, the current library is separate from the user library list. If IBM i rejects a `\libl` command with `CPF2184`, check whether one of the requested libraries is already the current library or whether the user lacks authority to one of the libraries.
+#### DDS system column names (`\sysnames`)
 
+On IBM i, every column has two names: the SQL `COLUMN_NAME` (up to 128 chars) and the DDS `SYSTEM_COLUMN_NAME` (up to 10 chars, the original RPG/DDS field name). Use `\sysnames` to switch between them.
+
+```sql
+SQL> \sysnames on          -- query headers show SYSTEM_COLUMN_NAME
+SQL> \sysnames off         -- query headers show COLUMN_NAME (default)
+SQL> \sysnames             -- toggle
+```
+
+When active, the mapping is applied to:
+- **SELECT results** — column headers are replaced with the DDS system name.
+- **`\describe`** — the `COLUMN_NAME` column shows the DDS system name instead of the SQL name. Pass `--system-names` to activate it for a single `\describe` call without toggling the session flag.
+
+`\status` always shows the current state of `sysnames`.
 ### SQL execution
 
 End a statement with `;` or type `GO` / `RUN` on its own line. Multi-line input is supported.
@@ -330,7 +379,7 @@ SQL> \run /path/to/queries.sql
 SQL> \run updates.sql --stop-on-error
 ```
 
-The file is split on `;` delimiters, line comments (`--`) are stripped, and each statement is executed sequentially. By default execution continues on error; use `--stop-on-error` to halt at the first failure. A summary with counts and elapsed time is printed at the end.
+The file is split on `;` delimiters, line comments (`--`) are stripped, and each statement is executed sequentially. By default execution continues on error; use `--stop-on-error` to halt at the first failure. A summary with counts and elapsed time is printed at the end. Pass `--system-names` to display DDS system column names in SELECT output for that run (equivalent to `\sysnames on` but scoped to the file).
 
 ### Export
 
@@ -417,25 +466,172 @@ Options:
 
 History is persisted to `~/.strsql-node/history.json`.
 
+### Shell commands
+
+Pass any command to the system shell without leaving the session using `\cmd`:
+
+```
+SQL> \cmd ls -la /tmp
+SQL> \cmd cat /data/query.sql
+SQL> \cmd echo $PWD
+```
+
+**Changing the working directory** — `cd` is a shell built-in and cannot be delegated to a child process, so strsql handles it natively:
+
+```
+SQL> \cmd cd /Users/diego/queries
+cwd: /Users/diego/queries
+SQL> \cmd cd ~
+cwd: /Users/diego
+SQL> \cmd cd ..    (relative paths work too)
+```
+
+Changing the working directory affects all relative paths used in the same session (`\run`, `\import`, `\export`, `\edit`).
+
+Note: `\cmd` runs synchronously and inherits the terminal's stdin/stdout/stderr, so interactive programs (editors, pagers, etc.) work normally.
+
+### SQL editor
+
+Open SQL in your preferred editor with `\edit` (alias `\e`). When you save and close the editor, the SQL is executed automatically.
+
+```
+SQL> \edit              -- opens last executed query in $EDITOR
+SQL> \e                 -- same, short form
+SQL> \edit query.sql    -- open (or create) a specific file and execute on close
+```
+
+The temporary buffer is seeded with the content of the current multi-line buffer (if any) or the last executed statement from history.
+
+The editor is chosen from the environment in this order: `$VISUAL`, `$EDITOR`, `vi`. Set either variable to point to your preferred editor:
+
+```bash
+# Terminal editors
+export EDITOR=nano
+export EDITOR=vim
+
+# GUI editors (must support a "wait" flag so strsql knows when you're done)
+export VISUAL="code --wait"         # VS Code
+export VISUAL="subl --wait"         # Sublime Text
+export VISUAL="idea --wait"         # IntelliJ IDEA
+export VISUAL="cursor --wait"       # Cursor
+```
+
+> **Tip:** add the export to your shell profile (`~/.zshrc`, `~/.bashrc`) to make it permanent.
+
+### Migrations & Seeds (session)
+
+Run migrations and seeds against the currently connected database without leaving the REPL.
+
+#### `\migrations run`
+
+Apply all pending `.up.sql` files in the given directory (default action: `up`), or roll back the last applied migration (`down`). The tracking table defaults to `MIGRATION_LOG` but can be overridden per command or stored in the active profile.
+
+```
+\migrations run <path> [up|down] [--migration-table <name>]
+```
+
+```
+\migrations run ./migrations
+\migrations run ./migrations up
+\migrations run ./migrations down
+\migrations run ./migrations --migration-table MYLIB.MIGRATION_LOG
+```
+
+#### `\migrations create`
+
+Scaffold a timestamped migration file pair (`YYYYMMDDHHMMSS_<name>.up.sql` / `.down.sql`). Add `--from-table` to pre-populate the `.up.sql` with `CREATE TABLE` DDL from the currently connected database, and `.down.sql` with `DROP TABLE`.
+
+```
+\migrations create <path> <name> [--from-table [SCHEMA.]TABLE]
+```
+
+```
+\migrations create ./migrations add_orders_index
+\migrations create ./migrations create_orders --from-table MYLIB.ORDERS
+```
+
+#### `\seeds run`
+
+Apply all pending `.up.sql` seed files in the given directory (`up`), or roll back the last applied seed (`down`). The tracking table defaults to `SEED_LOG`.
+
+```
+\seeds run <path> [up|down] [--seed-table <name>]
+```
+
+```
+\seeds run ./seeds
+\seeds run ./seeds up
+\seeds run ./seeds down
+\seeds run ./seeds --seed-table MYLIB.SEED_LOG
+```
+
+#### `\seeds create`
+
+Scaffold a timestamped seed file pair. With `--from-table` or `-q` the `.up.sql` is pre-populated with `INSERT` (or `MERGE`/upsert) statements generated from live data. Primary keys are auto-detected when `--format upsert` is used with `--from-table`.
+
+```
+\seeds create <path> <name> [-q <sql>] [--from-table TABLE] [--table T] [--format insert|upsert] [--keys cols] [--batch N]
+```
+
+```
+# Empty scaffolding
+\seeds create ./seeds initial_data
+
+# INSERT from a live table (all rows)
+\seeds create ./seeds orders_2024 --from-table MYLIB.ORDERS
+
+# UPSERT from a live table — PKs detected automatically
+\seeds create ./seeds products --from-table MYLIB.PRODUCTS --format upsert
+
+# UPSERT from a custom query with explicit keys
+\seeds create ./seeds active_customers -q "SELECT * FROM MYLIB.CUSTOMERS WHERE ACTIVE=1" --table MYLIB.CUSTOMERS --format upsert --keys CUSNUM
+```
+
+| Command | Description |
+|---|---|
+| `\migrations run <path> [up\|down]` | Apply all pending migrations (`up`, default) or roll back the last one (`down`) |
+| `\migrations create <path> <name>` | Scaffold a timestamped migration file pair; add `--from-table` to pre-populate DDL |
+| `\seeds run <path> [up\|down]` | Apply all pending seeds (`up`) or roll back the last one (`down`) |
+| `\seeds create <path> <name>` | Scaffold a seed file pair; supports `--from-table`, `-q`, `--format upsert`, etc. |
+
+Options for `\migrations run`:
+- `--migration-table <name>` — tracking table (default: `MIGRATION_LOG`; also read from the active profile)
+
+Options for `\seeds run`:
+- `--seed-table <name>` — tracking table (default: `SEED_LOG`; also read from the active profile)
+
+Options for `\seeds create`:
+- `-q <sql>` — SQL query whose results become the seed data
+- `--from-table <TABLE>` — use `SELECT * FROM <TABLE>` as the source query
+- `--table <T>` — target table for `INSERT`/`UPSERT` (required with `-q`)
+- `--format insert|upsert` — output format (default: `insert`)
+- `--keys <cols>` — key columns for upsert, comma-separated (required with `-q --format upsert`)
+- `-b, --batch <N>` — rows per INSERT statement (default: `100`)
+
 ---
 
 ## CLI subcommands
 
 ```
-strsql [session]        Interactive REPL (default)
-strsql run <sql>        Execute a single SQL statement
-strsql import <file>    Import a file into a database
-strsql pipe             Transfer rows between two databases
-strsql profiles list    List saved profiles
-strsql profiles add     Add/update a profile
-strsql profiles remove  Delete a profile
-strsql drivers          List supported database types
+strsql [session]              Interactive REPL (default)
+strsql run [sql]              Execute a single SQL statement
+strsql import <file>          Import a file into a database
+strsql pipe                   Transfer rows between two databases
+strsql migrations run <path> [up|down]    Run database migrations
+strsql migrations create <path> <name>   Scaffold a migration file pair
+strsql seeds run <path> [up|down]         Run database seeds
+strsql seeds create <path> <name>         Scaffold a seed file pair
+strsql profiles list          List saved profiles
+strsql profiles add           Add/update a profile
+strsql profiles remove        Delete a profile
+strsql drivers                List supported database types
 ```
 
 ### `strsql run` options
 
 | Option | Description |
 |---|---|
+| `-q, --query <sql>` | SQL query/statement to execute instead of positional `[sql]` |
 | `-p, --profile <n>` | Source connection profile |
 | `-H, --host / -u, --user / --password / -s, --schema` | Inline connection params |
 | `-l, --library-list <libs>` | IBM i library list (comma-separated) |
@@ -482,6 +678,105 @@ strsql drivers          List supported database types
 | `--drop-if-exists` | DROP before CREATE |
 | `--mode-on-error skip` | Skip errors instead of abort |
 | `--dry-run` | Fetch only, no writes |
+
+---
+
+## Migrations & Seeds
+
+Migrations and seeds follow the same file-pair convention: each logical change is represented by a `.up.sql` file (forward) and a `.down.sql` file (rollback). Applied files are recorded in a tracking table (`MIGRATION_LOG` / `SEED_LOG`) so subsequent runs only apply what's new.
+
+### `strsql migrations run <path> [action]`
+
+Run all pending `.up.sql` files in `<path>` (action `up`, default), or roll back the last applied migration (action `down`).
+
+```bash
+strsql migrations run ./migrations           --profile ibmi-prod
+strsql migrations run ./migrations up        --profile ibmi-prod
+strsql migrations run ./migrations down      --profile ibmi-prod
+strsql migrations run ./migrations --host 10.0.0.1 -u MYUSER --password secret -s MYLIB
+```
+
+| Option | Description |
+|---|---|
+| `-p, --profile <n>` | Named connection profile |
+| `-H, --host / -u, --user / --password / -s, --schema` | Inline connection params |
+| `-l, --library-list <libs>` | IBM i library list (comma-separated) |
+| `--adapter <adapter>` | `odbc` \| `idb` (IBM i only) |
+| `--migration-table <name>` | Tracking table (default: `MIGRATION_LOG`) |
+
+### `strsql seeds run <path> [action]`
+
+Run all pending `.up.sql` seed files in `<path>` (`up`), or roll back the last applied seed (`down`).
+
+```bash
+strsql seeds run ./seeds           --profile ibmi-prod
+strsql seeds run ./seeds up        --profile ibmi-prod
+strsql seeds run ./seeds down      --profile ibmi-prod
+```
+
+| Option | Description |
+|---|---|
+| `-p, --profile <n>` | Named connection profile |
+| `-H, --host / -u, --user / --password / -s, --schema` | Inline connection params |
+| `-l, --library-list <libs>` | IBM i library list (comma-separated) |
+| `--adapter <adapter>` | `odbc` \| `idb` (IBM i only) |
+| `--seed-table <name>` | Tracking table (default: `SEED_LOG`) |
+
+### `strsql migrations create <path> <name>`
+
+Scaffold a timestamped migration file pair (`YYYYMMDDHHMMSS_<name>.up.sql` / `.down.sql`). With `--from-table` the `.up.sql` is pre-populated with `CREATE TABLE` DDL generated from the live database, and `.down.sql` with `DROP TABLE`.
+
+```bash
+# Empty scaffolding
+strsql migrations create ./migrations add_orders_index
+
+# Pre-populated from a live table
+strsql migrations create ./migrations create_orders \
+  --from-table MYLIB.ORDERS --profile ibmi-prod
+```
+
+| Option | Description |
+|---|---|
+| `--from-table <TABLE>` | Populate `.up.sql` with `CREATE TABLE` DDL from the DB |
+| `-p, --profile <n>` | Named connection profile (required with `--from-table`) |
+| `-H, --host / -u, --user / --password / -s, --schema` | Inline connection params |
+| `-l, --library-list <libs>` | IBM i library list (comma-separated) |
+| `--adapter <adapter>` | `odbc` \| `idb` (IBM i only) |
+
+### `strsql seeds create <path> <name>`
+
+Scaffold a timestamped seed file pair. With `--from-table` or `-q` the `.up.sql` is pre-populated with `INSERT` (or `MERGE`/upsert) statements generated from live data. Primary keys are auto-detected when `--format upsert` is combined with `--from-table`. An interactive prompt offers a `DELETE FROM` rollback in `.down.sql`.
+
+```bash
+# Empty scaffolding
+strsql seeds create ./seeds initial_data
+
+# INSERT from a live table (auto-selects all rows)
+strsql seeds create ./seeds orders_2024 \
+  --from-table MYLIB.ORDERS --profile ibmi-prod
+
+# UPSERT from a custom query with explicit keys
+strsql seeds create ./seeds active_customers \
+  -q "SELECT * FROM MYLIB.CUSTOMERS WHERE ACTIVE=1" \
+  --table MYLIB.CUSTOMERS --format upsert --keys CUSNUM --profile ibmi-prod
+
+# UPSERT from a live table — PKs detected automatically
+strsql seeds create ./seeds products \
+  --from-table MYLIB.PRODUCTS --format upsert --profile ibmi-prod
+```
+
+| Option | Description |
+|---|---|
+| `-q, --query <sql>` | SQL query whose results become the seed data |
+| `--from-table <TABLE>` | Use `SELECT * FROM <TABLE>` as the seed query |
+| `--table <T>` | Target table for `INSERT`/`UPSERT` statements (required with `-q`) |
+| `--format insert\|upsert` | Output format (default: `insert`) |
+| `--keys <cols>` | Key columns for upsert, comma-separated (required with `-q --format upsert`) |
+| `-b, --batch <n>` | Rows per INSERT statement (default: `100`) |
+| `-p, --profile <n>` | Named connection profile |
+| `-H, --host / -u, --user / --password / -s, --schema` | Inline connection params |
+| `-l, --library-list <libs>` | IBM i library list (comma-separated) |
+| `--adapter <adapter>` | `odbc` \| `idb` (IBM i only) |
 
 ---
 
@@ -668,6 +963,45 @@ d.mapType('CLOB', 0, 0)        // → TEXT
 Dialect.list()   // → ['ibmi','db2','sqlserver','postgresql','mysql','oracle','sqlite']
 ```
 
+### Migrations & Seeds (programmatic)
+
+```js
+const { runMigrations, runSeeds, createMigration, createSeed } = require('strsql-node');
+
+// Run all pending migrations (up)
+await runMigrations('up', {
+  config:          { host: '10.0.0.1', username: 'MYUSER', password: 'secret', defaultSchema: 'MYLIB' },
+  migrationsPath:  '/path/to/migrations',
+  migrationTable:  'MIGRATION_LOG',   // optional, default: 'MIGRATION_LOG'
+  schema:          'MYLIB',           // optional, qualifies tracking table
+});
+
+// Roll back the last migration
+await runMigrations('down', { config, migrationsPath: '/path/to/migrations' });
+
+// Run all pending seeds
+await runSeeds('up', {
+  config,
+  seedsPath:  '/path/to/seeds',
+  seedTable:  'SEED_LOG',   // optional, default: 'SEED_LOG'
+  schema:     'MYLIB',      // optional
+});
+
+// Scaffold file pairs
+const { upFile, downFile } = createMigration('add_orders_index', './migrations');
+const { upFile, downFile } = createMigration('create_orders',    './migrations', {
+  upContent:   'CREATE TABLE MYLIB.ORDERS (...);
+',
+  downContent: 'DROP TABLE MYLIB.ORDERS;
+',
+});
+
+const { upFile, downFile } = createSeed('initial_data', './seeds');
+const { upFile, downFile } = createSeed('products',     './seeds', { upContent: insertStatements });
+```
+
+`runMigrations` / `runSeeds` use `createConnection(config)` internally and handle connect/disconnect automatically.
+
 ### Formatters
 
 ```js
@@ -750,7 +1084,12 @@ strsql-node/
 │   │   ├── history.js      Command history with persistence
 │   │   ├── formatter.js    Output formatters: table, CSV, JSON, INSERT, MERGE/upsert
 │   │   ├── importer.js     File import engine (CSV, JSON, SQL)
-│   │   └── pipe.js         DB-to-DB streaming pipe + DDL generator
+│   │   ├── pipe.js         DB-to-DB streaming pipe + DDL generator
+│   │   └── migrations/
+│   │       ├── create.js         Scaffold timestamped migration/seed file pairs
+│   │       ├── migrate.js        Low-level migration apply/rollback helpers
+│   │       ├── migrationRunner.js  High-level runMigrations() — connects, runs up/down
+│   │       └── seedRunner.js     High-level runSeeds() — connects, runs up/down
 │   └── cli/
 │       ├── session.js      Interactive REPL (\commands, readline, progress)
 │       └── progress.js     Terminal progress bar
