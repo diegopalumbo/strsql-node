@@ -343,6 +343,19 @@ SQL> SELECT ORDNUM, CUSNAM, ORDDAT
   -> FETCH FIRST 20 ROWS ONLY;
 ```
 
+#### Pager compatibility (IBM i / PASE)
+
+When output exceeds terminal size, strsql uses a pager (`less`, `more`, or `most`).
+
+On IBM i/PASE (`aix`) ANSI colors are disabled automatically to avoid garbled output when the fallback pager is `more`.
+
+Useful environment variables:
+- `STRSQL_NO_PAGER=1` — disable pager entirely
+- `STRSQL_ASCII=1` — force ASCII table borders
+- `STRSQL_NO_COLOR=1` (or `NO_COLOR=1`) — strip ANSI colors from output
+
+Use `\pagerstatus` inside the session to inspect detected pager and pager-related environment settings.
+
 ### TAB completion
 
 Press `TAB` inside the interactive session to complete SQL keywords, `\commands`, table names, and column names. If more than one candidate exists, press `TAB` twice to show the list.

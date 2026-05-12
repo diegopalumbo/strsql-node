@@ -17,7 +17,11 @@ const { Importer, ERROR_MODE } = require('../lib/importer');
 const { Pipe, generateDDL }    = require('../lib/pipe');
 const { listDrivers }          = require('../lib/drivers');
 const { ProgressBar }          = require('./progress');
-const { printWithPager, prefersAsciiOutput, shouldUsePager } = require('../lib/pager');
+const { printWithPager, prefersAsciiOutput, shouldUsePager, shouldDisableChalk } = require('../lib/pager');
+
+if (shouldDisableChalk()) {
+  chalk.level = 0;
+}
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 

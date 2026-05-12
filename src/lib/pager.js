@@ -17,6 +17,7 @@
  *   - When the output fits in the terminal (fewer lines than rows) it
  *     also skips the pager to avoid unnecessary overhead.
  *   - Set STRSQL_NO_PAGER=1 or pass { force: false } to disable.
+ *   - Set STRSQL_NO_COLOR=1 to strip ANSI styles before pager rendering.
  *   - Set PAGER env var to override the auto-detected command.
  */
 
@@ -186,6 +187,24 @@ function prefersAsciiOutput() {
   return false;
 }
 
+function shouldDisableChalk() {
+  if (process.env.STRSQL_NO_COLOR === '1') return true;
+  if (process.env.STRSQL_NO_COLOR === '0') return false;
+
+  // NO_COLOR is a de-facto standard understood by many CLIs.
+  if (Object.prototype.hasOwnProperty.call(process.env, 'NO_COLOR')) return true;
+
+  // IBM i PASE commonly falls back to `more`; disable ANSI styles to avoid
+  // unreadable escape sequences in pager output.
+  if (os.platform() === 'aix') return true;
+
+  const pager = detectPager();
+  const name = pagerName(pager);
+  if (name === 'more' || name === 'more.com') return true;
+
+  return false;
+}
+
 /**
  * Build the argument list for the detected pager.
  *
@@ -211,8 +230,10 @@ function pagerDebugInfo() {
     args: pager ? pagerArgs(pager) : [],
     interactive: isInteractive(),
     ascii: prefersAsciiOutput(),
+    noColor: shouldDisableChalk(),
     envPager: process.env.PAGER || null,
     envLess: process.env.LESS || null,
+    envNoColor: process.env.STRSQL_NO_COLOR || process.env.NO_COLOR || null,
   };
 }
 
@@ -284,21 +305,23 @@ function shouldUsePager(content, opts = {}) {
  * @returns {Promise<void>}
  */
 async function printWithPager(text, opts = {}) {
+  const displayText = shouldDisableChalk() ? stripAnsi(text) : text;
+
   if (!shouldUsePager(text, opts)) {
-    process.stdout.write(text + '\n');
+    process.stdout.write(displayText + '\n');
     return;
   }
 
   // 1. Try to find a pager
   const pager = detectPager();
   if (!pager) {
-    process.stdout.write(text + '\n');
+    process.stdout.write(displayText + '\n');
     return;
   }
 
   const spec = pagerCommandSpec(pager);
   if (!spec.command) {
-    process.stdout.write(text + '\n');
+    process.stdout.write(displayText + '\n');
     return;
   }
 
@@ -313,14 +336,14 @@ async function printWithPager(text, opts = {}) {
 
     let child;
     try {
-      fs.writeFileSync(tmpFile, text + '\n', 'utf8');
+      fs.writeFileSync(tmpFile, displayText + '\n', 'utf8');
       // Pass LESSCHARSET=utf-8 so that less correctly handles multi-byte
       // UTF-8 sequences (box-drawing characters) on systems where the
       // locale is not configured for UTF-8 (e.g. IBM i PASE).
       const childEnv = { ...process.env, LESSCHARSET: process.env.LESSCHARSET || 'utf-8' };
       child = spawn(spec.command, [...args, tmpFile], { stdio: 'inherit', env: childEnv });
     } catch {
-      process.stdout.write(text + '\n');
+      process.stdout.write(displayText + '\n');
       try { fs.unlinkSync(tmpFile); } catch {}
       resolve();
       return;
@@ -332,11 +355,11 @@ async function printWithPager(text, opts = {}) {
     });
     child.on('error', () => {
       // Pager couldn't start — fall back to plain write
-      process.stdout.write(text + '\n');
+      process.stdout.write(displayText + '\n');
       try { fs.unlinkSync(tmpFile); } catch {}
       resolve();
     });
   });
 }
 
-module.exports = { printWithPager, detectPager, isInteractive, prefersAsciiOutput, pagerDebugInfo, shouldUsePager };
+module.exports = { printWithPager, detectPager, isInteractive, prefersAsciiOutput, pagerDebugInfo, shouldUsePager, shouldDisableChalk };

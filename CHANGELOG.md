@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- Pager output on IBM i/PASE (`aix`) is now rendered without ANSI color sequences to prevent unreadable characters when `more` is used as fallback pager.
+
+---
+
 ## [1.0.18] - 2026-05-09
 
 ### Added
