@@ -75,6 +75,11 @@ class Db2iIdbConnection {
     this.db = loadConnector();
     this.conn = new this.db.dbconn();
 
+    // Enable auto-commit so DML statements (INSERT/UPDATE/DELETE) are
+    // committed immediately without requiring an explicit COMMIT.
+    // SQL_ATTR_AUTOCOMMIT (102) = SQL_TRUE (1). Must be set BEFORE conn().
+    this.conn.setConnAttr(102, 1); // SQL_ATTR_AUTOCOMMIT = SQL_TRUE
+
     // Enable IBM i system naming mode (SQL_ATTR_DBC_SYS_NAMING = 10004).
     // In system naming mode, unqualified table references are resolved via
     // the job's library list (like NAM=1 in ODBC), instead of the current
@@ -131,18 +136,20 @@ class Db2iIdbConnection {
 
   async _executeStatement(sql, params = []) {
     const statement = this._statement();
+    let rowCount = 0;
     try {
       if (!params || params.length === 0) {
         await callbackToPromise(done => statement.exec(sql, done));
-        return;
+      } else {
+        await callbackToPromise(done => statement.prepare(sql, done));
+        await callbackToPromise(done => statement.bindParameters(params, done));
+        await callbackToPromise(done => statement.execute(done));
       }
-
-      await callbackToPromise(done => statement.prepare(sql, done));
-      await callbackToPromise(done => statement.bindParameters(params, done));
-      await callbackToPromise(done => statement.execute(done));
+      try { rowCount = statement.numRows() || 0; } catch {}
     } finally {
       try { statement.close(); } catch {}
     }
+    return rowCount;
   }
 
   async query(sql, params = []) {
@@ -159,9 +166,9 @@ class Db2iIdbConnection {
 
   async execute(sql, params = []) {
     const start = Date.now();
-    await this._executeStatement(sql, params);
+    const rowCount = await this._executeStatement(sql, params);
     return {
-      rowCount: 0,
+      rowCount,
       elapsed: Date.now() - start,
       statement: sql,
     };
