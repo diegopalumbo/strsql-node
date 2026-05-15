@@ -85,12 +85,6 @@ class Db2iIdbConnection {
     this.conn.setConnAttr(10004, 1); // SQL_ATTR_DBC_SYS_NAMING = SQL_TRUE
 
     this.conn.conn(this.buildConnectionString());
-
-    // Enable auto-commit so DML statements (INSERT/UPDATE/DELETE) are
-    // committed immediately without requiring an explicit COMMIT.
-    // SQL_ATTR_AUTOCOMMIT (102) = SQL_TRUE (1). Must be set AFTER conn().
-    this.conn.setConnAttr(102, 1); // SQL_ATTR_AUTOCOMMIT = SQL_TRUE
-
     this.connected = true;
 
     if (this.config.defaultSchema && !this.config.libraryList) {
@@ -150,6 +144,11 @@ class Db2iIdbConnection {
     } finally {
       try { statement.close(); } catch {}
     }
+    // idb-connector opens connections with auto-commit OFF by default.
+    // Issue an explicit COMMIT after every DML so changes are persisted.
+    const commitStmt = this._statement();
+    try { commitStmt.execSync('COMMIT'); } catch {}
+    try { commitStmt.close(); } catch {}
     return rowCount;
   }
 
