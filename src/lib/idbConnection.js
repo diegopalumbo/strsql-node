@@ -75,11 +75,6 @@ class Db2iIdbConnection {
     this.db = loadConnector();
     this.conn = new this.db.dbconn();
 
-    // Enable auto-commit so DML statements (INSERT/UPDATE/DELETE) are
-    // committed immediately without requiring an explicit COMMIT.
-    // SQL_ATTR_AUTOCOMMIT (102) = SQL_TRUE (1). Must be set BEFORE conn().
-    this.conn.setConnAttr(102, 1); // SQL_ATTR_AUTOCOMMIT = SQL_TRUE
-
     // Enable IBM i system naming mode (SQL_ATTR_DBC_SYS_NAMING = 10004).
     // In system naming mode, unqualified table references are resolved via
     // the job's library list (like NAM=1 in ODBC), instead of the current
@@ -90,6 +85,12 @@ class Db2iIdbConnection {
     this.conn.setConnAttr(10004, 1); // SQL_ATTR_DBC_SYS_NAMING = SQL_TRUE
 
     this.conn.conn(this.buildConnectionString());
+
+    // Enable auto-commit so DML statements (INSERT/UPDATE/DELETE) are
+    // committed immediately without requiring an explicit COMMIT.
+    // SQL_ATTR_AUTOCOMMIT (102) = SQL_TRUE (1). Must be set AFTER conn().
+    this.conn.setConnAttr(102, 1); // SQL_ATTR_AUTOCOMMIT = SQL_TRUE
+
     this.connected = true;
 
     if (this.config.defaultSchema && !this.config.libraryList) {
