@@ -17,24 +17,14 @@ function parseLibraryList(libs) {
 
 function loadConnector() {
   try {
-    return require('idb-connector');
+    return require('idb-pconnector');
   } catch (err) {
     err.message =
-      'Cannot load idb-connector. The idb adapter runs only on IBM i/PASE with ' +
+      'Cannot load idb-pconnector. The idb adapter runs only on IBM i/PASE with ' +
       'IBM\'s native Db2 for i Node.js connector installed. Install it on IBM i ' +
       'or use adapter=odbc. Original error: ' + err.message;
     throw err;
   }
-}
-
-function callbackToPromise(start) {
-  return new Promise((resolve, reject) => {
-    try {
-      start((value) => resolve(value));
-    } catch (err) {
-      reject(err);
-    }
-  });
 }
 
 function normalizeRows(rows) {
@@ -56,13 +46,32 @@ function systemName(name) {
   return value.toUpperCase();
 }
 
+function isDmlStatement(sql) {
+  return /^(INSERT|UPDATE|DELETE|MERGE)\b/i.test(String(sql || '').trim());
+}
+
+function hasNoCommitClause(sql) {
+  return /\bWITH\s+(NC|NONE)\b/i.test(String(sql || ''));
+}
+
+function needsNoCommitRetry(sql, err) {
+  const message = String(err?.message || '');
+  return isDmlStatement(sql) &&
+    !hasNoCommitClause(sql) &&
+    (message.includes('SQLSTATE=55019') || message.includes('SQLCODE=-7008'));
+}
+
+function appendNoCommitClause(sql) {
+  const trimmed = String(sql || '').trim().replace(/;\s*$/, '');
+  return `${trimmed} WITH NC`;
+}
+
 class Db2iIdbConnection {
   constructor(config = {}) {
     this.config = { type: 'ibmi', adapter: 'idb', ...config };
     this.type = 'ibmi';
     this.adapter = 'idb';
     this.driver = getDriver(this.type);
-    this.db = null;
     this.conn = null;
     this.connected = false;
   }
@@ -72,20 +81,17 @@ class Db2iIdbConnection {
   }
 
   async connect() {
-    this.db = loadConnector();
-    this.conn = new this.db.dbconn();
+    const { Connection } = loadConnector();
+    const url = this.buildConnectionString();
 
-    // Enable IBM i system naming mode (SQL_ATTR_DBC_SYS_NAMING = 10004).
-    // In system naming mode, unqualified table references are resolved via
-    // the job's library list (like NAM=1 in ODBC), instead of the current
-    // schema only. Must be called BEFORE conn().
-    // Note: in system naming mode, qualified references use SCHEMA/TABLE
-    // (slash) instead of SCHEMA.TABLE (period). Standard SQL dot-notation
-    // still works for SQL statements; only the CLI metadata APIs change.
-    this.conn.setConnAttr(10004, 1); // SQL_ATTR_DBC_SYS_NAMING = SQL_TRUE
-
-    this.conn.conn(this.buildConnectionString());
+    // Connection({ url }) connects immediately in the constructor.
+    this.conn = new Connection({ url });
     this.connected = true;
+
+    // Attempt to set no-commitment-control (SQL_ATTR_COMMIT=240, SQL_TXN_NO_COMMIT=5)
+    // so DML is permanent without explicit COMMIT on non-journaled tables.
+    // setConnAttr() is async in idb-pconnector (called after connect).
+    try { await this.conn.setConnAttr(240, 5); } catch { /* ignore if not supported */ }
 
     if (this.config.defaultSchema && !this.config.libraryList) {
       try {
@@ -101,8 +107,8 @@ class Db2iIdbConnection {
 
   async disconnect() {
     if (this.conn && this.connected) {
-      try { this.conn.disconn(); } catch {}
-      try { this.conn.close(); } catch {}
+      try { await this.conn.disconn(); } catch {}
+      try { await this.conn.close(); } catch {}
       this.connected = false;
       this.conn = null;
     }
@@ -110,45 +116,55 @@ class Db2iIdbConnection {
 
   _statement() {
     if (!this.connected) throw new Error('Not connected. Call connect() first.');
-    return new this.db.dbstmt(this.conn);
+    return this.conn.getStatement();
   }
 
   async _runStatement(sql, params = []) {
     const statement = this._statement();
     try {
       if (!params || params.length === 0) {
-        return normalizeRows(await callbackToPromise(done => statement.exec(sql, done)));
+        // exec() returns Promise<Array|null> — perfect for SELECT
+        const rows = await statement.exec(sql);
+        return normalizeRows(rows);
       }
 
-      await callbackToPromise(done => statement.prepare(sql, done));
-      await callbackToPromise(done => statement.bindParameters(params, done));
-      await callbackToPromise(done => statement.execute(done));
-      return normalizeRows(await callbackToPromise(done => statement.fetchAll(done)));
+      await statement.prepare(sql);
+      await statement.bindParameters(params);
+      await statement.execute();
+      const rows = await statement.fetchAll();
+      return normalizeRows(rows);
     } finally {
-      try { statement.close(); } catch {}
+      try { await statement.close(); } catch {}
     }
   }
 
   async _executeStatement(sql, params = []) {
-    const statement = this._statement();
     let rowCount = 0;
+    let statement = this._statement();
     try {
-      if (!params || params.length === 0) {
-        await callbackToPromise(done => statement.exec(sql, done));
-      } else {
-        await callbackToPromise(done => statement.prepare(sql, done));
-        await callbackToPromise(done => statement.bindParameters(params, done));
-        await callbackToPromise(done => statement.execute(done));
+      const run = async (statementSql) => {
+        await statement.prepare(statementSql);
+        if (params && params.length > 0) {
+          await statement.bindParameters(params);
+        }
+        await statement.execute();
+        try { rowCount = await statement.numRows() || 0; } catch {}
+      };
+
+      try {
+        await run(sql);
+      } catch (err) {
+        if (!needsNoCommitRetry(sql, err)) throw err;
+        try { await statement.close(); } catch {}
+        statement = this._statement();
+        await run(appendNoCommitClause(sql));
       }
-      try { rowCount = statement.numRows() || 0; } catch {}
+
+      // Commit for journaled tables; silently ignored for non-journaled (SQL_TXN_NO_COMMIT)
+      try { await statement.commit(); } catch {}
     } finally {
-      try { statement.close(); } catch {}
+      try { await statement.close(); } catch {}
     }
-    // idb-connector opens connections with auto-commit OFF by default.
-    // Issue an explicit COMMIT after every DML so changes are persisted.
-    const commitStmt = this._statement();
-    try { commitStmt.execSync('COMMIT'); } catch {}
-    try { commitStmt.close(); } catch {}
     return rowCount;
   }
 
@@ -272,11 +288,8 @@ class Db2iIdbConnection {
     if (currentLib && !this.config.defaultSchema) this.config.defaultSchema = currentLib;
     this.config.libraryList = info.user.length > 0 ? info.user : arr;
 
-    // idb-connector uses SQL naming mode by default: unqualified table names
-    // resolve to the current schema, NOT through the library list (unlike
-    // ODBC with NAM=1). After CHGLIBL, set the schema to the current library
-    // so that queries like SELECT * FROM MYTABLE find objects without explicit
-    // schema qualification.
+    // After CHGLIBL, set the schema to the current library so that
+    // unqualified table names resolve correctly.
     const schema = this.config.defaultSchema || currentLib;
     if (schema) {
       try { await this.execute(`SET SCHEMA ${systemName(schema)}`); } catch { /* non-fatal */ }
@@ -289,7 +302,7 @@ class Db2iIdbConnection {
 
   isConnected() { return this.connected; }
   get dbType() { return this.type; }
-  get dbLabel() { return `${this.driver.label} / idb-connector`; }
+  get dbLabel() { return `${this.driver.label} / idb-pconnector`; }
 }
 
 module.exports = { Db2iIdbConnection };
