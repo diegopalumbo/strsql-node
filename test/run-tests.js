@@ -20,6 +20,7 @@ const UNIT_TESTS = [
   'create.test.js',
   'formatter.test.js',
   'splitArgs.test.js',
+  'sessionHelp.test.js',
   'migrate.test.js',
   'seedRunner.test.js',
 ];

@@ -338,12 +338,14 @@ class STRSQLSession {
 
   async _metaCommand(cmd) {
     const [verb, ...args] = _splitArgs(cmd);
+    if (!verb) return;
 
     switch (verb.toLowerCase()) {
 
       case 'help':
       case 'h':
-        this._printHelp();
+        if (args[0]) this._printCommandHelp(args[0], args.slice(1));
+        else this._printHelp();
         break;
 
       case 'quit':
@@ -375,7 +377,7 @@ class STRSQLSession {
         if (positional[3] && !connCfg.defaultSchema)  connCfg.defaultSchema = positional[3];
 
         if (!connCfg.host && !connCfg.database) {
-          console.error(chalk.red('Usage: \\connect <host> [user] [pwd] [schema] [--type TYPE] [--adapter odbc|idb]'));
+          this._printCommandHelp('connect');
           break;
         }
         if (this.conn) await this.conn.disconnect().catch(() => {});
@@ -386,7 +388,7 @@ class STRSQLSession {
 
       case 'profile': {
         const [pname] = args;
-        if (!pname) { console.error(chalk.red('Usage: \\profile <name>')); break; }
+        if (!pname) { this._printCommandHelp('profile'); break; }
         if (this.conn) await this.conn.disconnect().catch(() => {});
         this._resetCompletionCache();
         const cfg = this.profiles.resolve(pname);
@@ -413,10 +415,7 @@ class STRSQLSession {
       case 'saveprofile': {
         const [pname, ...pfArgs] = args;
         if (!pname) {
-          console.error(chalk.red(
-            'Usage: \\saveprofile <n> --type TYPE --host H [--user U] [--password P]\n' +
-            '                        [--schema S] [--database DB] [--port N] [--adapter odbc|idb]'
-          ));
+          this._printCommandHelp('saveprofile');
           break;
         }
         const pfCfg = {};
@@ -450,7 +449,7 @@ class STRSQLSession {
 
       case 'delprofile': {
         const [pname] = args;
-        if (!pname) { console.error(chalk.red('Usage: \\delprofile <name>')); break; }
+        if (!pname) { this._printCommandHelp('delprofile'); break; }
         this.profiles.remove(pname);
         console.log(chalk.green(`Profile "${pname}" deleted.`));
         break;
@@ -532,7 +531,7 @@ class STRSQLSession {
         const useSystemNames = this.systemNames || args.includes('--system-names');
         const descArgs = args.filter(a => a !== '--system-names');
         const [table, schema] = descArgs;
-        if (!table) { console.error(chalk.red('Usage: \\describe [schema.]TABLE [--system-names]')); break; }
+        if (!table) { this._printCommandHelp('describe'); break; }
         const [result, pkSet] = await Promise.all([
           this.conn.describeTable(table, schema, { systemNames: useSystemNames }),
           this.conn.primaryKeys(table, schema),
@@ -559,9 +558,7 @@ class STRSQLSession {
 
       case 'export': {
         if (args.length === 0) {
-          console.error(chalk.red(
-            'Usage: \\export <file> [--table SCHEMA.TABLE] [--keys COL1,COL2] [--batch N]'
-          ));
+          this._printCommandHelp('export');
           break;
         }
 
@@ -623,11 +620,7 @@ class STRSQLSession {
 
       case 'import': {
         if (args.length === 0) {
-          console.error(chalk.red(
-            'Usage: \\import <file> [--table SCHEMA.TABLE] [--mode abort|skip|confirm]\n' +
-            '                      [--batch N] [--dry-run] [--map col1=COL1,col2=COL2]\n' +
-            '                      [--delimiter ,]'
-          ));
+          this._printCommandHelp('import');
           break;
         }
 
@@ -726,12 +719,7 @@ class STRSQLSession {
         }
 
         if (args.length === 0) {
-          console.error(chalk.red(
-            'Usage: \\pipe <src-table> --target-profile <n> [--target-table T]\n' +
-            '       [--mode insert|merge] [--keys C1,C2] [--batch N] [--truncate]\n' +
-            '       [--ddl] [--drop-if-exists] [--map c=C,...] [--dry-run]\n' +
-            '       [--where "..."] [--sql "SELECT ..."] [--mode-on-error skip]'
-          ));
+          this._printCommandHelp('pipe');
           break;
         }
 
@@ -846,7 +834,7 @@ class STRSQLSession {
 
         const [srcTable, ...ddlRest] = args;
         if (!srcTable) {
-          console.error(chalk.red('Usage: \\ddl [schema.]TABLE [--target-table T] [--exec] [--drop-if-exists]'));
+          this._printCommandHelp('ddl');
           break;
         }
 
@@ -920,7 +908,7 @@ class STRSQLSession {
 
       case 'run': {
         if (args.length === 0) {
-          console.error(chalk.red('Usage: \\run <file.sql> [--stop-on-error]'));
+          this._printCommandHelp('run');
           break;
         }
         if (!this.conn?.isConnected()) {
@@ -1090,7 +1078,7 @@ class STRSQLSession {
         // Reconstruct the raw command string preserving spaces
         const shellCmd = cmd.slice(verb.length).trimStart();
         if (!shellCmd) {
-          console.error(chalk.red('Usage: \\cmd <command>   (e.g. \\cmd ls -la  or  \\cmd cd /tmp)'));
+          this._printCommandHelp('cmd');
           break;
         }
 
@@ -1184,10 +1172,7 @@ class STRSQLSession {
       case 'migrations': {
         const [mgSubcmd, ...mgArgs] = args;
         if (!mgSubcmd || (mgSubcmd !== 'run' && mgSubcmd !== 'create')) {
-          console.error(chalk.red(
-            'Usage: \\migrations run <path> [up|down] [--migration-table <name>]\n' +
-            '       \\migrations create <path> <name> [--from-table [SCHEMA.]TABLE]'
-          ));
+          this._printCommandHelp('migrations');
           break;
         }
 
@@ -1197,7 +1182,7 @@ class STRSQLSession {
             break;
           }
           if (mgArgs.length === 0) {
-            console.error(chalk.red('Usage: \\migrations run <path> [up|down] [--migration-table <name>]'));
+            this._printCommandHelp('migrations', ['run']);
             break;
           }
 
@@ -1260,7 +1245,7 @@ class STRSQLSession {
             }
           }
           if (!mcPath || !mcName) {
-            console.error(chalk.red('Usage: \\migrations create <path> <name> [--from-table [SCHEMA.]TABLE]'));
+            this._printCommandHelp('migrations', ['create']);
             break;
           }
 
@@ -1305,11 +1290,7 @@ class STRSQLSession {
       case 'seeds': {
         const [sdSubcmd, ...sdArgs] = args;
         if (!sdSubcmd || (sdSubcmd !== 'run' && sdSubcmd !== 'create')) {
-          console.error(chalk.red(
-            'Usage: \\seeds run <path> [up|down] [--seed-table <name>]\n' +
-            '       \\seeds create <path> <name> [-q <sql>] [--from-table TABLE]\n' +
-            '                    [--table T] [--format insert|upsert] [--keys cols] [--batch N]'
-          ));
+          this._printCommandHelp('seeds');
           break;
         }
 
@@ -1319,7 +1300,7 @@ class STRSQLSession {
             break;
           }
           if (sdArgs.length === 0) {
-            console.error(chalk.red('Usage: \\seeds run <path> [up|down] [--seed-table <name>]'));
+            this._printCommandHelp('seeds', ['run']);
             break;
           }
 
@@ -1394,10 +1375,7 @@ class STRSQLSession {
             }
           }
           if (!scPath || !scName) {
-            console.error(chalk.red(
-              'Usage: \\seeds create <path> <name> [-q <sql>] [--from-table TABLE]\n' +
-              '                    [--table T] [--format insert|upsert] [--keys cols] [--batch N]'
-            ));
+            this._printCommandHelp('seeds', ['create']);
             break;
           }
           if (scFormat === 'upsert' && !scFromTable && !scKeys) {
@@ -1680,6 +1658,156 @@ class STRSQLSession {
 
   // ── help ──────────────────────────────────────────────────────────────────
 
+  _printCommandHelp(command, rest = []) {
+    const s = chalk.cyan;
+    const d = chalk.dim;
+    const cmd = String(command || '').toLowerCase();
+    const sub = String(rest[0] || '').toLowerCase();
+
+    const sections = {
+      connect: `
+${chalk.bold('Usage')}
+  ${s('\\connect')} <host> [user] [pwd] [schema]
+  ${s('\\connect')} --type TYPE --host H --user U --password P ${d('[--database DB] [--port N]')}
+
+${chalk.bold('Options')}
+  --type TYPE              Database type: ibmi, postgresql, mysql, sqlserver, oracle, db2, sqlite
+  --adapter odbc|idb       IBM i adapter
+  --schema S               Default schema / library
+  --library-list LIBS      IBM i library list, comma-separated
+`,
+      profile: `
+${chalk.bold('Usage')}
+  ${s('\\profile')} <name>
+
+Connect using a saved profile. Use ${s('\\profiles')} to list available profiles.
+`,
+      saveprofile: `
+${chalk.bold('Usage')}
+  ${s('\\saveprofile')} <name> --type TYPE --host H ${d('[--user U] [--password P]')}
+
+${chalk.bold('Options')}
+  --adapter odbc|idb       IBM i adapter
+  --schema S               Default schema / library
+  --database DB            Database name for non-IBM i connections
+  --port N                 Port
+  --library-list LIBS      IBM i library list, comma-separated
+  --migration-table NAME   Default migration tracking table
+  --seed-table NAME        Default seed tracking table
+`,
+      delprofile: `
+${chalk.bold('Usage')}
+  ${s('\\delprofile')} <name>
+`,
+      describe: `
+${chalk.bold('Usage')}
+  ${s('\\describe')} [schema.]TABLE ${d('[--system-names]')}
+  ${s('\\desc')} [schema.]TABLE ${d('[--system-names]')}
+
+Shows columns, data types, headings, nullability, defaults, and primary-key markers.
+`,
+      export: `
+${chalk.bold('Usage')}
+  ${s('\\export')} <file.csv>
+  ${s('\\export')} <file.json>
+  ${s('\\export')} <file.sql> ${d('[--table T] [--batch N]')}
+  ${s('\\export')} <file.insert.sql> ${d('[--table T] [--batch N]')}
+  ${s('\\export')} <file.merge.sql> ${d('--table T --keys C1,C2 [--batch N]')}
+
+${chalk.bold('Notes')}
+  CSV/JSON export needs only an output file.
+  INSERT/MERGE SQL export may need --table; MERGE always needs --keys.
+`,
+      import: `
+${chalk.bold('Usage')}
+  ${s('\\import')} <file.csv> ${d('--table SCHEMA.TABLE [--delimiter ,]')}
+  ${s('\\import')} <file.json> ${d('[--table T]')}
+  ${s('\\import')} <file.sql>
+
+${chalk.bold('Options')}
+  --mode abort|skip|confirm   Error behavior
+  --batch N                   Batch size
+  --dry-run                   Validate without writing
+  --map src=DEST,...          Column mapping
+`,
+      pipe: `
+${chalk.bold('Usage')}
+  ${s('\\pipe')} <src-table> --target-profile <name> ${d('[--target-table T]')}
+  ${s('\\pipe')} --sql "SELECT ..." --target-profile <name> --target-table T
+  ${s('\\pipe')} <src-table> --target-host H ${d('[--target-user U] [--target-password P]')}
+
+${chalk.bold('Options')}
+  --where "..."               WHERE clause for source table
+  --mode insert|merge         Transfer mode
+  --keys C1,C2                Required for merge mode
+  --batch N                   Rows per page/commit
+  --map src=DEST,...          Column mapping
+  --ddl                       Create target table from source schema
+  --drop-if-exists            Drop target table before --ddl
+  --truncate                  Delete target rows before import
+  --dry-run                   Fetch without writing
+  --mode-on-error abort|skip  Error behavior
+`,
+      ddl: `
+${chalk.bold('Usage')}
+  ${s('\\ddl')} [schema.]TABLE ${d('[--target-table T] [--exec] [--drop-if-exists]')}
+
+Generates CREATE TABLE DDL from the source table. Add --exec to run it.
+`,
+      run: `
+${chalk.bold('Usage')}
+  ${s('\\run')} <file.sql> ${d('[--stop-on-error] [--system-names]')}
+
+Executes statements from a SQL file in the current session.
+`,
+      cmd: `
+${chalk.bold('Usage')}
+  ${s('\\cmd')} <shell-command>
+  ${s('\\cmd cd')} <dir>
+`,
+    };
+
+    if (cmd === 'migrations') {
+      console.log(sub === 'run' ? `
+${chalk.bold('Usage')}
+  ${s('\\migrations run')} <path> ${d('[up|down] [--migration-table <name>]')}
+` : sub === 'create' ? `
+${chalk.bold('Usage')}
+  ${s('\\migrations create')} <path> <name> ${d('[--from-table [SCHEMA.]TABLE]')}
+` : `
+${chalk.bold('Usage')}
+  ${s('\\migrations run')} <path> ${d('[up|down] [--migration-table <name>]')}
+  ${s('\\migrations create')} <path> <name> ${d('[--from-table [SCHEMA.]TABLE]')}
+`);
+      return;
+    }
+
+    if (cmd === 'seeds') {
+      console.log(sub === 'run' ? `
+${chalk.bold('Usage')}
+  ${s('\\seeds run')} <path> ${d('[up|down] [--seed-table <name>]')}
+` : sub === 'create' ? `
+${chalk.bold('Usage')}
+  ${s('\\seeds create')} <path> <name> ${d('[-q <sql>] [--from-table TABLE]')}
+  ${d('[--table T] [--format insert|upsert] [--keys cols] [--batch N]')}
+` : `
+${chalk.bold('Usage')}
+  ${s('\\seeds run')} <path> ${d('[up|down] [--seed-table <name>]')}
+  ${s('\\seeds create')} <path> <name> ${d('[-q <sql>] [--from-table TABLE]')}
+  ${d('[--table T] [--format insert|upsert] [--keys cols] [--batch N]')}
+`);
+      return;
+    }
+
+    if (sections[cmd]) {
+      console.log(sections[cmd]);
+      return;
+    }
+
+    console.log(chalk.yellow(`No command-specific help for "${command}".`));
+    console.log(chalk.dim('Use \\help for the full command list.'));
+  }
+
   _printHelp() {
     const s = chalk.cyan;
     const d = chalk.dim;
@@ -1727,6 +1855,7 @@ ${chalk.bold('Import')}
 
 ${chalk.bold('DB2 → DB2 Pipe')}
   ${s('\\pipe')} <src-table> ${d('--target-profile <n>  [--target-table T]')}
+  ${d('Use \\help pipe for all pipe options')}
 
 ${chalk.bold('DDL')}
   ${s('\\ddl')} <table> ${d('[--target-table T] [--exec] [--drop-if-exists]')}
