@@ -107,20 +107,22 @@ strsql --adapter idb --host '*LOCAL' -s MYLIB
 | Requirement | Notes |
 |---|---|
 | Node.js ≥ 16 | https://nodejs.org/en |
-| `odbc` npm package | Requires native build (`node-gyp`) |
-| ODBC driver for your DB | See table above |
+| ODBC driver for your DB | Required only on Linux/Windows/Mac. On IBMi is optional ( Odbc is needed only if you have to connect to external databases otherwise this package uses idb-pconnector |
 | unixODBC (Linux / PASE) | `sudo apt-get install unixodbc unixodbc-dev` |
 
+### IBM i ODBC driver installation
+
+To use the default `odbc` adapter with IBM i / Db2 for i, install and configure the IBM i Access ODBC driver for your platform before connecting with `strsql-node`.
+
+Official installation guide: https://ibmi-oss-docs.readthedocs.io/en/latest/odbc/installation.html
+
 ```bash
-# Linux / IBM i PASE
+# Linux 
 sudo apt-get install unixodbc unixodbc-dev build-essential
 
 # macOS
 brew install unixodbc
 ```
-
-For Windows see doc here: https://ibmi-oss-docs.readthedocs.io/en/latest/odbc/installation.html#windows
-
 
 ---
 
@@ -135,29 +137,6 @@ Or run directly without installing:
 ```bash
 node bin/strsql.js [command] [options]
 ```
-
-## Publishing to npm
-
-Use the package script to publish the current version to npm:
-
-```bash
-npm run publish:npm
-```
-
-Typical release flow:
-
-```bash
-# 1) run tests
-npm test
-
-# 2) bump version
-npm version patch
-
-# 3) publish
-npm run publish:npm
-```
-
-Note: make sure you are logged in with `npm login` and have publish rights on `strsql-node`.
 
 ---
 
