@@ -785,6 +785,62 @@ strsql seeds create ./seeds products \
 
 ---
 
+## Doctor & Setup
+
+### `strsql doctor`
+
+Diagnoses the local ODBC environment without making any changes to the system.
+
+```bash
+strsql doctor                  # full check
+strsql doctor --type ibmi      # narrow to IBM i driver only
+strsql doctor --type sqlserver
+strsql doctor --json           # machine-readable output
+```
+
+Checks performed:
+
+| Check | Detail |
+|---|---|
+| Node.js version | Warns if below v16 |
+| `odbc` npm module | Verifies the native module loads correctly |
+| ODBC manager | Detects unixODBC (macOS/Linux) or the Windows built-in |
+| Installed ODBC drivers | Lists all registered drivers via `odbcinst -q -d` / Windows registry |
+| Per-type driver match | Compares installed drivers against the expected names for the requested `--type` |
+
+When issues are found, `strsql doctor` prints actionable next steps and suggests running `strsql setup`.
+
+### `strsql setup`
+
+Interactive wizard that guides through driver installation and profile creation.
+
+```bash
+strsql setup                        # full interactive wizard
+strsql setup --type ibmi            # skip the DB-type menu
+strsql setup --type postgresql --profile prod-pg
+strsql setup --type sqlserver --install  # default "run commands" to yes
+```
+
+Wizard flow:
+
+1. Choose database type (or pass `--type` to skip)
+2. Show environment summary — Node, ODBC manager, driver status
+3. Show install commands for the detected package manager (Homebrew / apt / dnf / yum / winget / manual)
+4. Ask **"Show install commands?"** — prints them without executing
+5. Ask **"Run install commands now?"** — only executes after explicit confirmation (`--install` defaults this to yes); comments (`#`) are skipped
+6. Ask **"Create a strsql connection profile now?"** — prompts host, credentials, schema, optional custom driver name
+7. Ask **"Test connection now?"** — verifies the new profile by opening a real connection
+
+`strsql setup` never installs anything without explicit user confirmation.
+
+| Option | Description |
+|---|---|
+| `--type <type>` | Pre-select database type (e.g. `ibmi`, `sqlserver`, `postgresql`) |
+| `--profile <name>` | Profile name to pre-fill at the profile creation step |
+| `--install` | Default the "run install commands" prompt to yes |
+
+---
+
 ## Programmatic API
 
 ### ODBCConnection
