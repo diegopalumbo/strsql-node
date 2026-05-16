@@ -9,8 +9,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [1.0.25] - 2026-05-15
+
+### Changed
+- Replaced the optional native IBM i dependency from `idb-connector` to `idb-pconnector`.
+- Updated the IBM i `idb` adapter implementation to use the promise-based `idb-pconnector` API (`Connection`, async statements, async close/disconnect).
+
+### Fixed
+- IBM i `idb` DML execution now commits through the promise connector API and retries eligible `INSERT`/`UPDATE`/`DELETE`/`MERGE` statements with `WITH NC` when Db2 for i reports non-journaled table commitment-control errors (`SQLSTATE=55019` / `SQLCODE=-7008`).
+
+---
+
+## [1.0.24] - 2026-05-15
+
+> **Deprecated:** this release is deprecated. Use `1.0.25` or later.
+
+### Fixed
+- IBM i `idb` DML persistence now uses an explicit `COMMIT` after statements because `idb-connector` connections can run with auto-commit disabled by default.
+- Session banner copy no longer says "via ODBC" when the active adapter can also be native IBM i `idb`.
+
+---
+
+## [1.0.23] - 2026-05-15
+
+> **Deprecated:** this release is deprecated. Use `1.0.25` or later.
+
+### Fixed
+- IBM i `idb` auto-commit setup was moved to run after the native connection is opened, matching the connector's expected lifecycle.
+
+---
+
+## [1.0.22] - 2026-05-15
+
+> **Deprecated:** this release is deprecated. Use `1.0.25` or later.
+
+### Fixed
+- IBM i `idb` DML execution now captures affected row counts and attempts auto-commit for `INSERT`/`UPDATE`/`DELETE`, fixing cases where `DELETE` statements were executed but not persisted.
+
+---
+
+## [1.0.21] - 2026-05-12
+
+> **Deprecated:** this release is deprecated. Use `1.0.25` or later.
+
 ### Fixed
 - Pager output on IBM i/PASE (`aix`) is now rendered without ANSI color sequences to prevent unreadable characters when `more` is used as fallback pager.
+- Added `STRSQL_NO_COLOR=1` / `NO_COLOR` support to strip ANSI styles from output, and exposed the no-color state in `\pagerstatus`.
+- On IBM i/PASE and when the detected pager is `more`, chalk colors are disabled automatically before pager rendering.
+
+---
+
+## [1.0.20] - 2026-05-10
+
+> **Deprecated:** this release is deprecated. Use `1.0.25` or later.
+
+### Changed
+- Internal version bump only; no user-facing changes.
+
+---
+
+## [1.0.19] - 2026-05-10
+
+> **Deprecated:** this release is deprecated. Use `1.0.25` or later.
+
+### Changed
+- Updated migration and seed documentation to use the grouped CLI command names: `strsql migrations run`, `strsql migrations create`, `strsql seeds run`, and `strsql seeds create`.
+- Expanded the README examples for interactive `\migrations` and `\seeds` commands, including tracking table options, `--from-table`, `--format upsert`, and `--keys` guidance.
 
 ---
 
@@ -200,7 +266,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `\clear`, `\quit` / `\exit` — utility commands
 - Programmatic API: `ODBCConnection`, `Importer`, `Pipe`, `Dialect`, formatters (`toInsert`, `toMerge`, `toCSV`, `toJSON`, `exportToFile`, `generateDDL`)
 
-[Unreleased]: https://github.com/diegopalumbo/strsql-node/compare/v1.0.11...HEAD
+[Unreleased]: https://github.com/diegopalumbo/strsql-node/compare/v1.0.25...HEAD
+[1.0.25]: https://github.com/diegopalumbo/strsql-node/compare/v1.0.24...v1.0.25
+[1.0.24]: https://github.com/diegopalumbo/strsql-node/compare/v1.0.23...v1.0.24
+[1.0.23]: https://github.com/diegopalumbo/strsql-node/compare/v1.0.22...v1.0.23
+[1.0.22]: https://github.com/diegopalumbo/strsql-node/compare/v1.0.21...v1.0.22
+[1.0.21]: https://github.com/diegopalumbo/strsql-node/compare/v1.0.20...v1.0.21
+[1.0.20]: https://github.com/diegopalumbo/strsql-node/compare/v1.0.19...v1.0.20
+[1.0.19]: https://github.com/diegopalumbo/strsql-node/compare/v1.0.18...v1.0.19
+[1.0.18]: https://github.com/diegopalumbo/strsql-node/compare/v1.0.17...v1.0.18
+[1.0.17]: https://github.com/diegopalumbo/strsql-node/compare/v1.0.16...v1.0.17
+[1.0.16]: https://github.com/diegopalumbo/strsql-node/compare/v1.0.15...v1.0.16
+[1.0.15]: https://github.com/diegopalumbo/strsql-node/compare/v1.0.14...v1.0.15
+[1.0.14]: https://github.com/diegopalumbo/strsql-node/compare/v1.0.13...v1.0.14
+[1.0.13]: https://github.com/diegopalumbo/strsql-node/compare/v1.0.12...v1.0.13
+[1.0.12]: https://github.com/diegopalumbo/strsql-node/compare/v1.0.11...v1.0.12
 [1.0.11]: https://github.com/diegopalumbo/strsql-node/compare/v1.0.10...v1.0.11
 [1.0.10]: https://github.com/diegopalumbo/strsql-node/compare/v1.0.9...v1.0.10
 [1.0.9]: https://github.com/diegopalumbo/strsql-node/compare/v1.0.8...v1.0.9
