@@ -1,6 +1,6 @@
 {
   "name": "strsql-node",
-  "version": "1.0.27",
+  "version": "1.0.28",
   "description": "STRSQL session emulator for Node.js via ODBC and more",
   "main": "src/lib/index.js",
   "repository": {
@@ -16,7 +16,8 @@
     "test": "node test/run-tests.js",
     "test:unit": "node test/run-tests.js --unit",
     "test:cli": "node test/run-tests.js --cli",
-    "release:publish": "npm publish --access public"
+    "release:publish": "npm publish --access public",
+    "postinstall": "node -e \"console.log('\\n  strsql-node installed.\\n  ODBC drivers are installed separately.\\n  Run: strsql doctor   to check your environment.\\n  Run: strsql setup    for guided driver + profile setup.\\n')\""
   },
   "keywords": [
     "ibm-i",

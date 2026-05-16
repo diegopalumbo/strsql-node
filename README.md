@@ -18,6 +18,7 @@
 | **Import** | Load `.csv`, `.json`, or `.sql` files into any supported database, with column mapping, batch size control, dry-run, and skip-on-error modes |
 | **Dialect engine** | Handles identifier quoting, value literals, upsert strategy, pagination syntax, and DDL type mapping per database |
 | **Connection profiles** | Named profiles stored in `~/.strsql-node/profiles.json` for quick multi-environment switching |
+| **Doctor & Setup** | `strsql doctor` diagnoses the ODBC environment; `strsql setup` guides driver installation and profile creation |
 | **Migrations & Seeds** | Versioned SQL migrations and data seeds: `up`/`down` file pairs, a DB tracking table, `migrations run`/`seeds run` CLI commands, and scaffolding helpers (`migrations create`, `seeds create`) with optional DDL/data pre-population from an existing table |
 | **Programmatic API** | `ODBCConnection`, `Importer`, `Pipe`, `Dialect`, formatter functions, and migration/seed runners fully usable as a Node.js library |
 
@@ -59,6 +60,7 @@
 - [Dialect reference](#dialect-reference)
 - [File layout](#file-layout)
 - [Security notes](#security-notes)
+- [Doctor & Setup](#doctor--setup)
 - [Publishing to npm](#publishing-to-npm)
 - [License](#license)
 
@@ -110,18 +112,27 @@ strsql --adapter idb --host '*LOCAL' -s MYLIB
 | ODBC driver for your DB | Required only on Linux/Windows/Mac. On IBMi is optional ( Odbc is needed only if you have to connect to external databases otherwise this package uses idb-pconnector |
 | unixODBC (Linux / PASE) | `sudo apt-get install unixodbc unixodbc-dev` |
 
-### IBM i ODBC driver installation
+### ODBC driver installation
 
-To use the default `odbc` adapter with IBM i / Db2 for i, install and configure the IBM i Access ODBC driver for your platform before connecting with `strsql-node`.
-
-Official installation guide: https://ibmi-oss-docs.readthedocs.io/en/latest/odbc/installation.html
+ODBC drivers are installed separately from `strsql-node`. After installing, run:
 
 ```bash
-# Linux 
-sudo apt-get install unixodbc unixodbc-dev build-essential
+strsql doctor          # check what is (or isn't) installed
+strsql setup           # guided wizard: driver install commands + profile creation
+strsql doctor --type ibmi  # narrow check to a specific database type
+```
 
-# macOS
-brew install unixodbc
+`strsql doctor` detects your OS, Node.js version, ODBC manager (unixODBC / Windows built-in), and all installed drivers, then reports what is missing and what to do next.
+
+`strsql setup` asks which database you want, shows the correct install commands for your package manager (Homebrew / apt / dnf / yum / winget), and optionally runs them — then walks you through creating and testing a connection profile.
+
+For IBM i / Db2 for i, the official driver guide is: https://ibmi-oss-docs.readthedocs.io/en/latest/odbc/installation.html
+
+```bash
+# Quick reference — install unixODBC before the driver
+brew install unixodbc   # macOS
+sudo apt-get install unixodbc unixodbc-dev   # Linux (Debian/Ubuntu)
+sudo dnf install unixODBC unixODBC-devel     # Linux (RHEL/Fedora)
 ```
 
 ---
@@ -617,6 +628,8 @@ strsql profiles list          List saved profiles
 strsql profiles add           Add/update a profile
 strsql profiles remove        Delete a profile
 strsql drivers                List supported database types
+strsql doctor                 Diagnose ODBC environment
+strsql setup                  Guided ODBC driver + profile wizard
 ```
 
 ### `strsql run` options
@@ -769,6 +782,62 @@ strsql seeds create ./seeds products \
 | `-H, --host / -u, --user / --password / -s, --schema` | Inline connection params |
 | `-l, --library-list <libs>` | IBM i library list (comma-separated) |
 | `--adapter <adapter>` | `odbc` \| `idb` (IBM i only) |
+
+---
+
+## Doctor & Setup
+
+### `strsql doctor`
+
+Diagnoses the local ODBC environment without making any changes to the system.
+
+```bash
+strsql doctor                  # full check
+strsql doctor --type ibmi      # narrow to IBM i driver only
+strsql doctor --type sqlserver
+strsql doctor --json           # machine-readable output
+```
+
+Checks performed:
+
+| Check | Detail |
+|---|---|
+| Node.js version | Warns if below v16 |
+| `odbc` npm module | Verifies the native module loads correctly |
+| ODBC manager | Detects unixODBC (macOS/Linux) or the Windows built-in |
+| Installed ODBC drivers | Lists all registered drivers via `odbcinst -q -d` / Windows registry |
+| Per-type driver match | Compares installed drivers against the expected names for the requested `--type` |
+
+When issues are found, `strsql doctor` prints actionable next steps and suggests running `strsql setup`.
+
+### `strsql setup`
+
+Interactive wizard that guides through driver installation and profile creation.
+
+```bash
+strsql setup                        # full interactive wizard
+strsql setup --type ibmi            # skip the DB-type menu
+strsql setup --type postgresql --profile prod-pg
+strsql setup --type sqlserver --install  # default "run commands" to yes
+```
+
+Wizard flow:
+
+1. Choose database type (or pass `--type` to skip)
+2. Show environment summary — Node, ODBC manager, driver status
+3. Show install commands for the detected package manager (Homebrew / apt / dnf / yum / winget / manual)
+4. Ask **"Show install commands?"** — prints them without executing
+5. Ask **"Run install commands now?"** — only executes after explicit confirmation (`--install` defaults this to yes); comments (`#`) are skipped
+6. Ask **"Create a strsql connection profile now?"** — prompts host, credentials, schema, optional custom driver name
+7. Ask **"Test connection now?"** — verifies the new profile by opening a real connection
+
+`strsql setup` never installs anything without explicit user confirmation.
+
+| Option | Description |
+|---|---|
+| `--type <type>` | Pre-select database type (e.g. `ibmi`, `sqlserver`, `postgresql`) |
+| `--profile <name>` | Profile name to pre-fill at the profile creation step |
+| `--install` | Default the "run install commands" prompt to yes |
 
 ---
 
