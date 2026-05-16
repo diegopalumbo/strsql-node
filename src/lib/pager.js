@@ -171,7 +171,7 @@ function prefersAsciiOutput() {
   // IBM i PASE: less on PASE does not interpret UTF-8 multi-byte sequences
   // by default, rendering box-drawing characters as raw hex bytes.
   // Use ASCII borders unless the user explicitly opts out with STRSQL_ASCII=0.
-  if (os.platform() === 'aix') return true;
+  if (os.platform() === 'os400' || os.platform() === 'aix') return true;
 
   if (os.platform() !== 'win32') return false;
 
@@ -196,7 +196,7 @@ function shouldDisableChalk() {
 
   // IBM i PASE commonly falls back to `more`; disable ANSI styles to avoid
   // unreadable escape sequences in pager output.
-  if (os.platform() === 'aix') return true;
+  if (os.platform() === 'os400' || os.platform() === 'aix') return true;
 
   const pager = detectPager();
   const name = pagerName(pager);

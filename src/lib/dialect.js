@@ -65,7 +65,8 @@ const DIALECT_DEFS = {
       return _mapTypeDB2(srcType, len, scale);
     },
 
-    nullableSuffix: col => col.IS_NULLABLE === 'N' ? 'NOT NULL' : 'NULL',
+    // Db2 for i does not accept the NULL keyword in CREATE TABLE; nullable is the default.
+    nullableSuffix: col => col.IS_NULLABLE === 'N' ? 'NOT NULL' : '',
   },
 
   // ── DB2 LUW ──────────────────────────────────────────────────────────────
