@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [1.0.26] - 2026-05-16
+
+### Added
+- Added command-specific interactive help via `\help <command>` for connection, profile, import/export, pipe, DDL, run, shell, migrations, and seeds commands.
+- Added focused help output for migration and seed subcommands such as `\help migrations run` and `\help seeds create`.
+
+### Changed
+- Invalid or incomplete interactive meta-command usage now routes to the relevant command help instead of printing one-off usage strings.
+- The main `\help` output now points users to `\help pipe` for the full DB2-to-DB2 pipe option list.
 
 ---
 
