@@ -709,4 +709,29 @@ seedsCmd
     console.log(chalk.green(`Created seed files:\n  ${upFile}\n  ${downFile}`));
   });
 
+// ─── strsql doctor  (ODBC environment diagnosis) ─────────────────────────────
+program
+  .command('doctor')
+  .description('Diagnose ODBC environment: Node, ODBC manager, installed drivers')
+  .helpOption('--help', 'display help for command')
+  .option('--type <type>', 'Narrow check to a specific DB type (e.g. ibmi, sqlserver)')
+  .option('--json',        'Emit diagnosis as JSON')
+  .action((opts) => {
+    const { runDoctor } = require('../src/cli/doctor');
+    runDoctor({ type: opts.type, json: opts.json });
+  });
+
+// ─── strsql setup  (guided ODBC + profile wizard) ────────────────────────────
+program
+  .command('setup')
+  .description('Guided ODBC driver installation and profile creation wizard')
+  .helpOption('--help', 'display help for command')
+  .option('--type <type>',       'Pre-select database type (e.g. ibmi, sqlserver, postgresql)')
+  .option('--profile <name>',    'Profile name to create at the end of setup')
+  .option('--install',           'Default "run install commands" prompt to yes')
+  .action(async (opts) => {
+    const { runSetup } = require('../src/cli/setup');
+    await runSetup({ type: opts.type, profile: opts.profile, install: opts.install });
+  });
+
 program.parse(process.argv);

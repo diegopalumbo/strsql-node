@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.0.27] - 2026-05-16
+
+### Added
+- `strsql doctor` — diagnoses the local ODBC environment: Node.js version, `odbc` npm module, ODBC manager (unixODBC / Windows built-in), list of installed ODBC drivers, and per-driver-type check against the expected driver names. Supports `--type <type>` to narrow the check to a specific database and `--json` for machine-readable output.
+- `strsql setup` — interactive guided wizard that selects the database type, summarises the detected environment, prints the correct install commands for the detected package manager (Homebrew / apt / dnf / yum / winget), optionally runs them after explicit confirmation, and creates and tests a connection profile in one flow. Supports `--type`, `--profile`, and `--install` flags.
+- `src/lib/driverRegistry.js` — central knowledge base covering all 7 supported database types (ibmi, sqlserver, postgresql, mysql, oracle, db2, sqlite): known ODBC driver name variants, per-platform install commands, official download URLs, and helpers for manager detection, driver listing, and package-manager detection.
+- Light `postinstall` hint in `package.json` pointing new users to `strsql doctor` and `strsql setup`.
+
+---
+
 ## [1.0.26] - 2026-05-16
 
 ### Added
