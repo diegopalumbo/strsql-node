@@ -267,15 +267,30 @@ async function _createProfileInteractive(rl, dbType, presetName) {
   if (dbType === 'sqlite') {
     host = await promptText(rl, 'Database file path', '/path/to/db.sqlite');
   } else if (dbType === 'ibmi') {
-    host     = await promptText(rl, 'IBM i hostname or IP');
+    const isIbmiPase = process.platform === 'os400' ||
+      process.platform === 'aix' ||
+      (process.platform === 'linux' && process.arch === 'ppc64');
+
+    adapter = 'odbc';
+
+    if (isIbmiPase) {
+      const adapterChoice = await promptChoice(rl, 'Which adapter do you want to use?', [
+        { type: 'odbc', label: 'odbc  — IBM i Access ODBC Driver' },
+        { type: 'idb',  label: 'idb   — idb-pconnector native driver (recommended on IBM i / PASE)' },
+      ]);
+      adapter = adapterChoice.type;
+    } else {
+      console.log(chalk.dim('  Adapter: odbc (IBM i Access ODBC Driver)'));
+    }
+
+    if (adapter === 'idb') {
+      console.log(chalk.dim('  idb-pconnector connects locally; host is usually *LOCAL.'));
+    }
+
+    host     = await promptText(rl, 'IBM i hostname or IP', adapter === 'idb' ? '*LOCAL' : '');
     username = await promptText(rl, 'Username');
     password = await promptText(rl, 'Password (stored in plain text)');
     schema   = await promptText(rl, 'Default schema/library (optional)');
-    adapter  = 'odbc';
-    const useIdb = process.platform === 'linux'
-      ? await promptYN(rl, 'Running on IBM i PASE? Use idb-pconnector instead of ODBC?', false)
-      : false;
-    if (useIdb) adapter = 'idb';
   } else {
     host     = await promptText(rl, 'Hostname or IP');
     database = await promptText(rl, 'Database name');
@@ -284,15 +299,17 @@ async function _createProfileInteractive(rl, dbType, presetName) {
     schema   = await promptText(rl, 'Default schema (optional)');
   }
 
-  // Custom driver name?
+  // Custom driver name? (not applicable for idb-pconnector)
   let driverName;
-  const entry    = DRIVER_REGISTRY[dbType];
-  const defDriver = entry.driverNames[0];
-  console.log();
-  console.log(chalk.dim(`  Default ODBC driver name: ${defDriver}`));
-  const customDriver = await promptYN(rl, 'Specify a custom driver name?', false);
-  if (customDriver) {
-    driverName = await promptText(rl, 'ODBC driver name', defDriver);
+  if (adapter !== 'idb') {
+    const entry    = DRIVER_REGISTRY[dbType];
+    const defDriver = entry.driverNames[0];
+    console.log();
+    console.log(chalk.dim(`  Default ODBC driver name: ${defDriver}`));
+    const customDriver = await promptYN(rl, 'Specify a custom driver name?', false);
+    if (customDriver) {
+      driverName = await promptText(rl, 'ODBC driver name', defDriver);
+    }
   }
 
   // Test connection?
